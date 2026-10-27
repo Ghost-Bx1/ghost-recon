@@ -72,19 +72,60 @@ try:
 except ImportError:
     DNS_OK = False
 
-VERSAO = "2.0.0"
+VERSAO = "2.1.0"
 
-BANNER = r"""
-   _____ _               _     ____
-  / ____| |             | |   |  _ \
- | |  __| |__   ___  ___| |_  | |_) | ___  ___ ___  _ __
- | | |_ | '_ \ / _ \/ __| __| |  _ < / _ \/ __/ _ \| '_ \
- | |__| | | | | (_) \__ \ |_  | |_) |  __/ (_| (_) | | | |
-  \_____|_| |_|\___/|___/\__| |____/ \___|\___\___/|_| |_|
 
-  Ghost-Recon v{v}  |  Framework de Reconhecimento Ofensivo
-  By Gh0st-Bx1  |  github.com/Ghost-Bx1
-""".format(v=VERSAO)
+def _build_banner():
+    import re as _re
+    G = "\033[92m"; Cy = "\033[96m"; D = "\033[2m"; N = "\033[1m"
+    W = "\033[97m"; X = "\033[0m"
+    IW = 68; eq = "\u2550" * IW; sp = " " * IW
+    TL = "\u2554"; TR = "\u2557"; BL = "\u255a"; BR = "\u255d"; VB = "\u2551"
+    hl = "\u2500" * 44; bar = "\u2502"
+    vl = lambda s: len(_re.sub(r"\x1b\[[0-9;]*m", "", s))
+
+    def _row(s):
+        n = vl(s); p = max(0, IW - n); l = p // 2; r = p - l
+        return f"{G}{VB}{X}{' ' * l}{s}{' ' * r}{G}{VB}{X}"
+
+    def _row_l(s):
+        n = vl(s); p = max(0, IW - n - 2)
+        return f"{G}{VB}{X}  {s}{' ' * p}{G}{VB}{X}"
+
+    # Ghost art (Pac-Man ghost style) with speed lines
+    ga = [
+        (f"{D}         {X}", f"{G}  .-\"\"\"\"\"\"\"\"\"-.  {X}", f"{D}         {X}"),
+        (f"{D}-- -..   {X}", f"{G} /  _       _  \\ {X}", f"{D}   ..- --{X}"),
+        (f"{D}----..   {X}", f"{G}| (:3 )  (:3 )  |{X}", f"{D}   ..----{X}"),
+        (f"{D}----..   {X}", f"{G}|   '--------'  |{X}", f"{D}   ..----{X}"),
+        (f"{D}-...     {X}", f"{G}|    \\ \\U/ /    |{X}", f"{D}     ...-{X}"),
+        (f"{D}         {X}", f"{G}|_______________|{X}", f"{D}         {X}"),
+        (f"{D}         {X}", f"{G} \\/\\/\\ /\\ /\\/\\/ {X}", f"{D}         {X}"),
+    ]
+
+    info = [
+        f"{G}{N}GHOST-RECON{X}",
+        f"{Cy}v{VERSAO}  {D}Offensive Reconnaissance Framework{X}",
+        f"{D}{hl}{X}",
+        f"{W}By Gh0st-Bx1  {D}{bar}  github.com/Ghost-Bx1{X}",
+        f"{D}{hl}{X}",
+        f"{D}--dns  --ssl  --http  --waf  --tech  --headers{X}",
+        f"{D}--subdomains  --email  --ct  --github-dork{X}",
+        f"{D}--email-harvest  --portas  --completo{X}",
+    ]
+
+    out = [f"{G}{TL}{eq}{TR}{X}", f"{G}{VB}{sp}{VB}{X}"]
+    for left, center, right in ga:
+        combined = left + center + right
+        out.append(_row(combined))
+    out.append(f"{G}{VB}{sp}{VB}{X}")
+    for i in info:
+        out.append(_row_l(i))
+    out += [f"{G}{VB}{sp}{VB}{X}", f"{G}{BL}{eq}{BR}{X}"]
+    return "\n".join(out)
+
+
+BANNER = _build_banner()
 
 C = {
     "R": "\033[91m", "G": "\033[92m", "Y": "\033[93m",
@@ -1902,6 +1943,118 @@ def gerar_relatorio(resultados, output_file, verbose=False):
 
 
 # ==============================================================================
+# GITHUB DORK / EMAIL HARVEST
+# ==============================================================================
+
+def buscar_github_dorks(dominio, verbose=False):
+    """Busca segredos expostos em repositorios publicos do GitHub via API."""
+    resultado = {"dominio": dominio, "achados": [], "erro": None}
+    dorks = [
+        f'"{dominio}" password',
+        f'"{dominio}" api_key',
+        f'"{dominio}" secret',
+        f'"{dominio}" token',
+        f'"{dominio}" db_password',
+    ]
+    _secao("GITHUB DORK")
+    _log(f"Buscando segredos expostos para: {dominio}", "INFO")
+
+    for dork in dorks:
+        url = "https://api.github.com/search/code?q=" + requests.utils.quote(dork, safe="") + "&per_page=5"
+        try:
+            r = requests.get(url, headers={
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": "ghost-recon/2.1.0",
+            }, timeout=8)
+            if r.status_code == 200:
+                items = r.json().get("items", [])
+                for item in items:
+                    repo = item.get("repository", {}).get("full_name", "?")
+                    path = item.get("path", "?")
+                    html_url = item.get("html_url", "")
+                    resultado["achados"].append({
+                        "dork": dork,
+                        "repo": repo,
+                        "path": path,
+                        "url": html_url,
+                    })
+                    _log(f"EXPOSICAO: {repo}/{path}", "ACHADO")
+                    if verbose:
+                        print(f"    {html_url}")
+            elif r.status_code == 403:
+                _log("GitHub API rate limit atingido (unauthenticated). Use --gh-token para autenticar.", "ALERTA")
+                resultado["erro"] = "rate_limit"
+                break
+            elif r.status_code == 422:
+                continue
+        except Exception as e:
+            resultado["erro"] = str(e)
+            _log(f"Erro GitHub dork: {e}", "ERRO")
+            break
+
+    total = len(resultado["achados"])
+    _log(f"GitHub Dork: {total} achado(s) potencial(is)", "OK" if total == 0 else "ALERTA")
+    return resultado
+
+
+def extrair_emails(dominio, verbose=False):
+    """Extrai emails via pesquisa web (headers HTTP, paginas, CT logs)."""
+    resultado = {"dominio": dominio, "emails": [], "fontes": []}
+    emails_encontrados = set()
+    import re as _re_email
+
+    _secao("EMAIL HARVEST")
+    _log(f"Extraindo emails para: {dominio}", "INFO")
+
+    fontes_url = [
+        f"https://{dominio}",
+        f"https://www.{dominio}",
+        f"https://{dominio}/contact",
+        f"https://{dominio}/about",
+    ]
+
+    padrao = _re_email.compile(
+        r"[a-zA-Z0-9._%+\-]+@" + _re_email.escape(dominio), _re_email.IGNORECASE
+    )
+    padrao_generico = _re_email.compile(
+        r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", _re_email.IGNORECASE
+    )
+
+    for url in fontes_url:
+        try:
+            r = requests.get(url, timeout=6, headers={"User-Agent": "ghost-recon/2.1.0"},
+                             verify=False, allow_redirects=True)
+            encontrados = padrao.findall(r.text) + padrao_generico.findall(r.text)
+            for e in encontrados:
+                e_norm = e.lower().strip()
+                if dominio in e_norm and e_norm not in emails_encontrados:
+                    emails_encontrados.add(e_norm)
+                    resultado["fontes"].append(url)
+                    if verbose:
+                        _log(f"Email: {e_norm} (fonte: {url})", "ACHADO")
+        except Exception:
+            pass
+
+    # Via crt.sh (CT logs ja usados, mas pode ter emails em CN/SAN)
+    try:
+        r = requests.get(f"https://crt.sh/?q=%40{dominio}&output=json", timeout=8,
+                         headers={"User-Agent": "ghost-recon/2.1.0"})
+        if r.status_code == 200:
+            for entry in r.json():
+                cn = entry.get("name_value", "") + " " + entry.get("common_name", "")
+                for match in padrao.findall(cn):
+                    emails_encontrados.add(match.lower())
+    except Exception:
+        pass
+
+    resultado["emails"] = sorted(emails_encontrados)
+    _log(f"Email Harvest: {len(resultado['emails'])} email(s) encontrado(s)", "OK" if resultado['emails'] else "INFO")
+    for e in resultado["emails"]:
+        _log(f"  -> {e}", "ACHADO")
+    return resultado
+
+
+# ==============================================================================
 # ORQUESTRADOR PRINCIPAL
 # ==============================================================================
 
@@ -2045,6 +2198,14 @@ def escanear(dominio, args):
         resultados["passive_dns"] = passive_dns(dominio_limpo, vt_key=vt_key,
                                                 verbose=args.verbose)
 
+    # GitHub Dork
+    if executar_tudo or getattr(args, "github_dork", False):
+        resultados["github_dork"] = buscar_github_dorks(dominio_limpo, verbose=args.verbose)
+
+    # Email Harvest
+    if executar_tudo or getattr(args, "email_harvest", False):
+        resultados["email_harvest"] = extrair_emails(dominio_limpo, verbose=args.verbose)
+
     # Sumario final
     _secao("SUMARIO")
     _imprimir_sumario(resultados, dominio_limpo)
@@ -2172,6 +2333,10 @@ def main():
                      help="Testar open redirect em parametros comuns")
     grp.add_argument("--passivedns", action="store_true",
                      help="Passive DNS via HackerTarget (sem key) ou VirusTotal")
+    grp.add_argument("--github-dork", dest="github_dork", action="store_true",
+                     help="Buscar segredos expostos no GitHub (dork na API publica)")
+    grp.add_argument("--email-harvest", dest="email_harvest", action="store_true",
+                     help="Extrair emails do dominio (paginas + CT logs + scraping)")
 
     # Opcoes de porta
     grp_port = parser.add_argument_group("Opcoes de varredura de portas")
@@ -2220,6 +2385,8 @@ def main():
                args.headers, args.portas, args.subdomains, args.email, args.ct,
                args.asn, args.s3, args.cors, args.js, args.openredirect,
                args.passivedns, args.completo,
+               getattr(args, "github_dork", False),
+               getattr(args, "email_harvest", False),
                bool(getattr(args, "shodan_key", None))]
     if not any(modulos):
         print(BANNER)
