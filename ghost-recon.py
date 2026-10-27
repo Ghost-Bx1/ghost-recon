@@ -55,7 +55,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from threading import Lock
 
 try:
@@ -74,11 +74,19 @@ except ImportError:
 try:
     import dns.resolver
     import dns.exception
+    import dns.zone
+    import dns.query
+    import dns.rdatatype
     DNS_OK = True
 except ImportError:
     DNS_OK = False
 
-VERSAO = "2.1.0"
+VERSAO = "2.2.0"
+
+
+def _utcnow():
+    """Retorna datetime UTC atual (compativel com Python 3.12+)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _build_banner():
@@ -527,6 +535,42 @@ SUBDOMAINS_LISTA = [
     "idp", "saml", "ldap",
     "smtp-relay", "postmaster", "abuse",
     "autoconfig", "autoconfiguration",
+    # Infraestrutura adicional
+    "ssh", "sftp2", "ftp3", "ntp", "time", "radius",
+    "ldap2", "ad", "dc", "dc1", "dc2", "pdc",
+    "mx4", "mx5", "smtp5", "smtp6", "mta",
+    "mail4", "mail5", "mailin", "mailout",
+    # Nuvem e containers
+    "ecs", "eks", "gke", "az", "azure",
+    "gcr", "ecr", "harbor", "quay",
+    "helm", "rancher", "argocd", "flux",
+    # DevOps expandido
+    "sonar", "sonarqube", "trivy", "snyk",
+    "circle", "drone", "tekton", "actions",
+    "prometheus", "alertmanager", "loki", "tempo",
+    # Aplicacoes
+    "ticket", "tickets", "helpdesk", "service",
+    "servicedesk", "incident", "kb2", "faq",
+    "dl", "lists", "newsletter", "announce",
+    "forms", "survey", "crm2", "erp",
+    # Geograficos
+    "us1", "us2", "us-east", "us-west",
+    "eu1", "eu2", "eu-west", "eu-central",
+    "ap1", "ap2", "ap-south", "ap-northeast",
+    "sa", "ca", "au", "jp", "sg", "in",
+    # Numericos comuns
+    "web1", "web2", "web3",
+    "app1", "app2", "app3",
+    "srv1", "srv2", "srv3",
+    "node1", "node2", "node3",
+    "host1", "host2", "host3",
+    # Seguranca
+    "siem", "edr", "dlp", "ids", "ips",
+    "proxy2", "proxy3", "squid",
+    "cert", "pki", "ca", "ocsp", "crl",
+    # Monitoramento
+    "uptimerobot", "pingdom", "newrelic",
+    "datadog", "splunk", "sumologic",
 ]
 
 _lock = Lock()
@@ -654,20 +698,54 @@ def recon_dns(dominio, verbose=False):
         resultado["registros"]["CNAME"] = cname
         _log(f"  {'CNAME':6} -> {', '.join(cname)}", "OK")
 
-    # Verificar zone transfer (apenas indica, nao executa)
+    # DNSSEC check
+    if DNS_OK:
+        try:
+            resolver = dns.resolver.Resolver()
+            resolver.timeout = 5
+            resolver.lifetime = 8
+            resolver.use_edns(0, dns.flags.DO, 4096)
+            rrsig = resolver.resolve(dominio, "RRSIG")
+            if rrsig:
+                _log("DNSSEC: RRSIG presente - DNSSEC ativo", "OK")
+                resultado["dnssec"] = "ativo"
+        except Exception:
+            try:
+                ds = _resolver_dns(dominio, "DS", verbose)
+                if ds:
+                    _log("DNSSEC: registro DS encontrado", "OK")
+                    resultado["dnssec"] = "ds_presente"
+                else:
+                    _log("DNSSEC: nao configurado", "DEBUG", verbose_only=True, verbose=verbose)
+                    resultado["dnssec"] = "ausente"
+            except Exception:
+                resultado["dnssec"] = "ausente"
+
+    # Verificar zone transfer (tenta AXFR real)
     ns_list = resultado["registros"].get("NS", [])
     if ns_list:
         resultado["ns_autoritativo"] = ns_list
         _log(f"  Servidores NS: {', '.join(ns_list)}", "INFO")
-        # Verificar se NS permite transferencia de zona
-        for ns in ns_list[:2]:
+        resultado["axfr"] = []
+        for ns in ns_list[:3]:
             try:
                 ns_ip = socket.gethostbyname(ns)
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(3)
-                if sock.connect_ex((ns_ip, 53)) == 0:
-                    resultado["resumo"].append(f"Porta 53/TCP aberta em {ns} ({ns_ip}) - possivel AXFR")
+                tcp_aberto = sock.connect_ex((ns_ip, 53)) == 0
                 sock.close()
+                if tcp_aberto and DNS_OK:
+                    try:
+                        z = dns.zone.from_xfr(dns.query.xfr(ns_ip, dominio, timeout=5))
+                        nomes = sorted(z.nodes.keys())
+                        alerta = f"AXFR SUCESSO em {ns} ({ns_ip}) - {len(nomes)} registros expostos!"
+                        _log(alerta, "CRITICO")
+                        resultado["resumo"].append(alerta)
+                        resultado["axfr"].append({"ns": ns, "ip": ns_ip,
+                                                  "registros": [str(n) for n in nomes[:50]]})
+                    except Exception:
+                        resultado["resumo"].append(f"Porta 53/TCP aberta em {ns} ({ns_ip}) - AXFR recusado")
+                        _log(f"  53/TCP aberto em {ns} - AXFR recusado", "INFO")
             except Exception:
                 pass
 
@@ -819,7 +897,7 @@ def recon_ssl(dominio, porta=443, verbose=False):
                     if not_after:
                         try:
                             expira = datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
-                            agora = datetime.utcnow()
+                            agora = _utcnow()
                             dias = (expira - agora).days
                             resultado["certificado"]["dias_restantes"] = dias
                             if dias < 0:
@@ -966,6 +1044,33 @@ def recon_http(url, stealth=False, proxy=None, timeout=10, verbose=False):
         # Auditar headers de seguranca
         seg = _auditar_headers_seguranca(resp.headers, verbose)
         resultado["seguranca"] = seg
+
+        # Favicon hash (MD5)
+        try:
+            import hashlib
+            base_url = f"{resp.url.split('/')[0]}//{resp.url.split('/')[2]}"
+            fav_resp = sess.get(f"{base_url}/favicon.ico", timeout=timeout, allow_redirects=True)
+            if fav_resp.status_code == 200 and fav_resp.content:
+                fav_hash = hashlib.md5(fav_resp.content).hexdigest()
+                resultado["favicon_md5"] = fav_hash
+                _log(f"Favicon MD5: {fav_hash}", "INFO")
+        except Exception:
+            pass
+
+        # HTTP methods permitidos (OPTIONS)
+        try:
+            opt_resp = sess.options(resp.url, timeout=timeout)
+            allow = opt_resp.headers.get("Allow", opt_resp.headers.get("allow", ""))
+            if allow:
+                metodos = [m.strip() for m in allow.split(",")]
+                resultado["http_methods"] = metodos
+                perigosos = [m for m in metodos if m.upper() in ["PUT", "DELETE", "TRACE", "CONNECT", "PATCH"]]
+                if perigosos:
+                    _log(f"Metodos HTTP perigosos: {', '.join(perigosos)}", "ALERTA")
+                else:
+                    _log(f"Metodos HTTP: {', '.join(metodos)}", "INFO")
+        except Exception:
+            pass
 
     except requests.exceptions.SSLError:
         _log(f"SSL invalido em {url} - tentando HTTP", "ALERTA")
@@ -1149,7 +1254,15 @@ def escanear_portas(host, portas=None, timeout=1.5, threads=100, verbose=False):
         resultado["ip"] = host_ip
         _log(f"IP resolvido: {host_ip}", "INFO")
     except Exception:
-        host_ip = host
+        # fallback via dnspython/DoH
+        ips = _resolver_dns(host, "A", verbose)
+        if ips:
+            host_ip = ips[0]
+            resultado["ip"] = host_ip
+            _log(f"IP resolvido (fallback): {host_ip}", "INFO")
+        else:
+            _log(f"Nao foi possivel resolver IP de {host}", "ALERTA")
+            host_ip = host
 
     args = [(host_ip, p, timeout) for p in portas]
     abertas = []
@@ -1203,7 +1316,20 @@ def enumerar_subdomains(dominio, wordlist=None, threads=30, verbose=False):
     """Brute-force de subdomains via resolucao DNS em paralelo."""
     if wordlist is None:
         wordlist = SUBDOMAINS_LISTA
-    resultado = {"dominio": dominio, "encontrados": [], "total_testados": len(wordlist)}
+    resultado = {"dominio": dominio, "encontrados": [], "total_testados": len(wordlist),
+                 "wildcard": False}
+
+    # Detectar wildcard DNS antes de enumerar
+    import uuid
+    rand_sub = f"{uuid.uuid4().hex[:12]}.{dominio}"
+    try:
+        wildcard_ips = socket.gethostbyname_ex(rand_sub)[2]
+        if wildcard_ips:
+            _log(f"Wildcard DNS detectado em *.{dominio} -> {wildcard_ips[0]} (resultados podem ter falsos positivos)", "ALERTA")
+            resultado["wildcard"] = True
+            resultado["wildcard_ip"] = wildcard_ips[0]
+    except Exception:
+        pass
 
     args = [(dominio, sub) for sub in wordlist]
     encontrados = []
@@ -1221,6 +1347,13 @@ def enumerar_subdomains(dominio, wordlist=None, threads=30, verbose=False):
 
     _finalizar_progresso()
     encontrados.sort(key=lambda x: x["subdomain"])
+
+    # Filtrar wildcard se detectado
+    wildcard_ip = resultado.get("wildcard_ip")
+    if wildcard_ip:
+        encontrados = [s for s in encontrados if wildcard_ip not in s["ips"]]
+        _log(f"Wildcard filtrado - removendo entradas com IP {wildcard_ip}", "INFO")
+
     resultado["encontrados"] = encontrados
 
     if encontrados:
@@ -1451,8 +1584,13 @@ def recon_asn(dominio, verbose=False):
         ip = socket.gethostbyname(dominio)
         resultado["ip"] = ip
     except Exception:
-        _log("Nao foi possivel resolver IP para lookup ASN", "ERRO")
-        return resultado
+        ips = _resolver_dns(dominio, "A")
+        if ips:
+            ip = ips[0]
+            resultado["ip"] = ip
+        else:
+            _log("Nao foi possivel resolver IP para lookup ASN", "ERRO")
+            return resultado
     try:
         url = f"https://ipinfo.io/{ip}/json"
         req = urllib.request.Request(
@@ -2061,6 +2199,86 @@ def extrair_emails(dominio, verbose=False):
 
 
 # ==============================================================================
+# MODULO: ROBOTS / SECURITY.TXT / SITEMAP
+# ==============================================================================
+
+def recon_robots(url, stealth=False, proxy=None, timeout=10, verbose=False):
+    """Busca robots.txt, security.txt e sitemap.xml do alvo."""
+    resultado = {"url": url, "robots": None, "security_txt": None,
+                 "sitemap": None, "disallow_paths": [], "interessante": []}
+
+    if not REQUESTS_OK:
+        _log("requests nao instalado - modulo robots limitado", "ALERTA")
+        return resultado
+
+    if not url.startswith("http"):
+        url = "https://" + url
+
+    sess = _get_session(proxy, timeout)
+    headers_req = {"User-Agent": random.choice(USER_AGENTS) if stealth else USER_AGENTS[0]}
+
+    base = f"{url.split('/')[0]}//{url.split('/')[2]}"
+
+    # robots.txt
+    try:
+        resp = sess.get(f"{base}/robots.txt", headers=headers_req,
+                        timeout=timeout, allow_redirects=True)
+        if resp.status_code == 200 and resp.text:
+            resultado["robots"] = resp.text[:5000]
+            linhas = resp.text.splitlines()
+            disallow = []
+            for linha in linhas:
+                l = linha.strip()
+                if l.lower().startswith("disallow:"):
+                    caminho = l[9:].strip()
+                    if caminho and caminho != "/":
+                        disallow.append(caminho)
+            resultado["disallow_paths"] = disallow[:50]
+            _log(f"robots.txt encontrado: {len(disallow)} caminhos Disallow", "OK")
+            # Caminhos interessantes
+            interessante_kw = ["admin", "api", "backup", "config", "db", "debug",
+                               "export", "internal", "private", "secret", "upload"]
+            for p in disallow:
+                if any(kw in p.lower() for kw in interessante_kw):
+                    _log(f"  Disallow interessante: {p}", "ACHADO")
+                    resultado["interessante"].append(p)
+        else:
+            _log("robots.txt: nao encontrado ou vazio", "DEBUG", verbose_only=True, verbose=verbose)
+    except Exception as e:
+        _log(f"robots.txt erro: {e}", "DEBUG", verbose_only=True, verbose=verbose)
+
+    # security.txt (RFC 9116)
+    for sec_path in ["/.well-known/security.txt", "/security.txt"]:
+        try:
+            resp2 = sess.get(f"{base}{sec_path}", headers=headers_req,
+                             timeout=timeout, allow_redirects=True)
+            if resp2.status_code == 200 and resp2.text:
+                resultado["security_txt"] = resp2.text[:2000]
+                _log(f"security.txt encontrado em {sec_path}", "OK")
+                for linha in resp2.text.splitlines():
+                    if linha.startswith("Contact:"):
+                        _log(f"  {linha}", "INFO")
+                break
+        except Exception:
+            pass
+
+    # sitemap.xml
+    for sm_path in ["/sitemap.xml", "/sitemap_index.xml", "/sitemap.xml.gz"]:
+        try:
+            resp3 = sess.get(f"{base}{sm_path}", headers=headers_req,
+                             timeout=timeout, allow_redirects=True)
+            if resp3.status_code == 200 and resp3.text:
+                contagem = resp3.text.count("<loc>")
+                resultado["sitemap"] = sm_path
+                _log(f"Sitemap encontrado em {sm_path} ({contagem} URLs)", "OK")
+                break
+        except Exception:
+            pass
+
+    return resultado
+
+
+# ==============================================================================
 # ORQUESTRADOR PRINCIPAL
 # ==============================================================================
 
@@ -2072,7 +2290,7 @@ def escanear(dominio, args):
     resultados = {
         "alvo": dominio_limpo,
         "url": url,
-        "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "timestamp": _utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "versao": VERSAO,
     }
 
@@ -2092,7 +2310,13 @@ def escanear(dominio, args):
     if executar_tudo or args.ssl:
         _secao("SSL/TLS")
         porta_ssl = 443
-        resultados["ssl"] = recon_ssl(dominio_limpo, porta=porta_ssl, verbose=args.verbose)
+        r_ssl = recon_ssl(dominio_limpo, porta=porta_ssl, verbose=args.verbose)
+        if r_ssl.get("erro") and not dominio_limpo.startswith("www."):
+            _log("SSL falhou no dominio raiz, tentando www...", "INFO")
+            r_ssl_www = recon_ssl(f"www.{dominio_limpo}", porta=porta_ssl, verbose=args.verbose)
+            if not r_ssl_www.get("erro"):
+                r_ssl = r_ssl_www
+        resultados["ssl"] = r_ssl
 
     # HTTP Fingerprinting (inclui WAF, tech, headers se --completo)
     if executar_tudo or args.http or args.waf or args.tech or args.headers:
@@ -2104,6 +2328,17 @@ def escanear(dominio, args):
             timeout=args.timeout,
             verbose=args.verbose,
         )
+        if r_http.get("erro") and not dominio_limpo.startswith("www."):
+            _log("HTTP falhou no dominio raiz, tentando www...", "INFO")
+            r_http2 = recon_http(
+                f"https://www.{dominio_limpo}",
+                stealth=args.stealth,
+                proxy=args.proxy,
+                timeout=args.timeout,
+                verbose=args.verbose,
+            )
+            if not r_http2.get("erro"):
+                r_http = r_http2
         resultados["http"] = r_http
 
         if not (executar_tudo or args.waf):
@@ -2145,6 +2380,13 @@ def escanear(dominio, args):
             dominio_limpo, wordlist=wordlist,
             threads=args.threads, verbose=args.verbose,
         )
+
+    # Robots / Security.txt / Sitemap
+    if executar_tudo or getattr(args, "robots", False):
+        _secao("ROBOTS / SECURITY.TXT / SITEMAP")
+        resultados["robots"] = recon_robots(
+            url, stealth=args.stealth, proxy=args.proxy,
+            timeout=args.timeout, verbose=args.verbose)
 
     # Email Security
     if executar_tudo or args.email:
@@ -2343,6 +2585,8 @@ def main():
                      help="Buscar segredos expostos no GitHub (dork na API publica)")
     grp.add_argument("--email-harvest", dest="email_harvest", action="store_true",
                      help="Extrair emails do dominio (paginas + CT logs + scraping)")
+    grp.add_argument("--robots", action="store_true",
+                     help="Buscar robots.txt, security.txt e sitemap.xml")
 
     # Opcoes de porta
     grp_port = parser.add_argument_group("Opcoes de varredura de portas")
@@ -2393,6 +2637,7 @@ def main():
                args.passivedns, args.completo,
                getattr(args, "github_dork", False),
                getattr(args, "email_harvest", False),
+               getattr(args, "robots", False),
                bool(getattr(args, "shodan_key", None))]
     if not any(modulos):
         print(BANNER)
