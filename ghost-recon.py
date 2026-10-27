@@ -59,6 +59,12 @@ from datetime import datetime
 from threading import Lock
 
 try:
+    import colorama
+    colorama.init(autoreset=False)
+except ImportError:
+    pass
+
+try:
     import requests
     from requests.adapters import HTTPAdapter
     REQUESTS_OK = True
