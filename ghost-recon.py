@@ -605,7 +605,7 @@ def _resolver_dns(dominio, tipo="A", verbose=False):
             resolver.lifetime = 8
             resp = resolver.resolve(dominio, tipo)
             return [str(r).rstrip(".") for r in resp]
-        except dns.exception.NXDOMAIN:
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
             return []
         except Exception as e:
             _log(f"dnspython erro ({tipo}): {e}", "DEBUG", verbose_only=True, verbose=verbose)
