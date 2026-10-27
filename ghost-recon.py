@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Ghost-Recon v1.0.0 - Framework de Reconhecimento Ofensivo
 ==========================================================
@@ -1738,7 +1738,7 @@ def recon_cors(url, stealth=False, proxy=None, timeout=10, verbose=False):
             if not acao:
                 continue
             if acao == "*":
-                _log("CORS wildcard (*) — qualquer origem permitida", "ALERTA")
+                _log("CORS wildcard (*) - qualquer origem permitida", "ALERTA")
                 resultado["detalhes"].append({"origem": origem, "acao": acao,
                                               "credentials": creds, "nivel": "MEDIO"})
                 resultado["vulneravel"] = True
