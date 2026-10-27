@@ -55,8 +55,14 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from threading import Lock
+
+try:
+    import colorama
+    colorama.init(autoreset=False)
+except ImportError:
+    pass
 
 try:
     import requests
@@ -68,87 +74,98 @@ except ImportError:
 try:
     import dns.resolver
     import dns.exception
+    import dns.zone
+    import dns.query
+    import dns.rdatatype
     DNS_OK = True
 except ImportError:
     DNS_OK = False
 
-VERSAO = "1.0.0"
+VERSAO = "2.2.0"
+
+
+def _utcnow():
+    """Retorna datetime UTC atual (compativel com Python 3.12+)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 
 def _build_banner():
     import re as _re
     G = "\033[92m"; Cy = "\033[96m"; D = "\033[2m"; N = "\033[1m"
     W = "\033[97m"; X = "\033[0m"
-    IW = 68; eq = "=" * IW; sp = " " * IW
+    IW = 68; eq = "\u2550" * IW; sp = " " * IW
     TL = "\u2554"; TR = "\u2557"; BL = "\u255a"; BR = "\u255d"; VB = "\u2551"
-    hl = "-" * 44; bar = "|"
+    hl = "\u2500" * 44; bar = "\u2502"
     vl = lambda s: len(_re.sub(r"\x1b\[[0-9;]*m", "", s))
 
     def _row(s):
         n = vl(s); p = max(0, IW - n); l = p // 2; r = p - l
-        return f"{G}{VB}{X}{chr(32) * l}{s}{chr(32) * r}{G}{VB}{X}"
+        return f"{G}{VB}{X}{' ' * l}{s}{' ' * r}{G}{VB}{X}"
 
     def _row_l(s):
         n = vl(s); p = max(0, IW - n - 2)
-        return f"{G}{VB}{X}  {s}{chr(32) * p}{G}{VB}{X}"
+        return f"{G}{VB}{X}  {s}{' ' * p}{G}{VB}{X}"
 
+    # Ghost art (braille pixel art)
     ga = [
-        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠛⠛⠛⠿⠙⠁⠛⠻⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⠁⠠⣁⣤⣶⣶⣶⣶⣶⣶⣤⣀⠢⠕⠻⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⠡⠠⣴⡿⠋⠴⡿⣿⣿⣿⣿⣿⣿⣿⡿⣦⠱⠈⠳⠿⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠏⠴⠠⣾⣿⣤⠋⣴⣿⣿⣿⣿⣿⣿⣿⣿⣷⠌⠻⣶⣦⣤⣀⠉⠁⠻⣿⣿⣿⡿⠿⠓⠓⠻⠿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⠿⠟⠟⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠏⠀⠠⣿⣿⣿⡿⠛⠛⠻⣿⣿⣿⡿⠛⠛⡿⣿⣿⣧⠁⠁⡁⡈⡉⡁⠠⣿⣿⠋⠄⡁⣴⣶⣄⠐⠌⠻⣿⣿{X}", ""),
-        ("", f"{G}⠏⠀⣴⣦⣄⠢⠱⡿⣿⣿⣿⣿⣿⣿⠇⠀⣼⣿⣿⣿⠅⠀⠀  ⡺⣿⡿⠁⠀⠀⠀⡺⣿⣿⠆⠀⣿⣿⣿⣿⣿⠟⠁⠠⣴⣿⣿⣿⣿⣷⠈⠎⡿⣿{X}", ""),
-        ("", f"{G}⠇⠀⣿⣿⣿⣷⠌⠀⠙⡿⣿⣿⣿⣿⠀⠠⣿⣿⣿⣿⠀⠀⠀  ⠀⠈⣿⠇⠀⠀⠀⠀⠈⡿⣿⠇⠁⠻⣿⣿⣿⡿⠁⠠⣾⣿⣿⣿⡿⡿⣿⣷⠀⠘⣿{X}", ""),
-        ("", f"{G}⣇⠀⡿⣿⣿⠟⣿⣷⣄⠀⠙⡿⣿⠇⠀⣸⣿⣿⡿⣿⠁⠀⠀⠀  ⠸⣿⣧⠀⠀⠀⠀⣸⠈⣿⣷⠀⠈⣿⣿⡿⠁⠠⣾⣿⣿⠩⣿⠁⣾⣿⣿⠆⠀⡿{X}", ""),
-        ("", f"{G}⣿⠁⠘⣿⣿⣿⠘⣿⣿⣷⠌⠂⠁⠁⠠⣿⣿⠟⣰⡿⣷⣤⣤⣴⣿⣿⣿⣷⣄⣀⣴⣿⣧⠘⣿⣧⠐⠢⠁⠁⠠⣾⣿⣿⠇⣼⣿⠸⣿⣿⣿⣇⠀⠸{X}", ""),
-        ("", f"{G}⣿⣷⠁⠘⣿⣿⣧⠘⣿⣿⣿⣿⣶⣶⣿⣿⠏⠰⠃⣾⣿⣿⣿⣿⠏⠀⠈⣿⣿⣿⣿⣿⠏⠳⠘⣿⣿⣷⣶⣾⣿⣿⣿⣿⠠⣿⣿⣿⣿⣿⣿⣿⠀⠸{X}", ""),
-        ("", f"{G}⣿⣿⠇⠀⣿⣿⣿⠄⡿⡿⣿⣿⣿⣿⣿⣷⣾⣷⣿⣿⣿⣿⣿⣿⣧⣀⣀⣿⣿⣿⣿⣿⣿⣷⣾⣿⣿⣿⣿⣿⣿⣿⣿⠇⠘⠋⠁⠋⠉⠛⠿⣿⠀⠸{X}", ""),
-        ("", f"{G}⣿⣿⠇⠠⣿⣿⣿⣧⠸⠱⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠁⠠⣾⣿⠄⠈⠀⠀⠀⠀ ⣾{X}", ""),
-        ("", f"{G}⣿⠟⠀⣸⣿⣿⣿⣿⡜⠇⡿⣧⠙⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣄⠉⠻⠇⠀⠰⠀⠀ ⣀⣾{X}", ""),
-        ("", f"{G}⣿⠃⠘⠛⠀⠠⠄⡰⣤⠁⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⣼⣿⣿⣿⣿⣿⣿⣿⣷⣀⠀⠣⠸⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣆⠠⠀⠁⠀⠁⣿⣿⠟⠀⣽⣿⣿⣿⣿⠸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠻⣿⣿⣿⣿⣿⠃⣿⣿⣿⠟⣸⣿⣿⣿⡿⠛⠠⠃⣻⣾⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣷⣶⠆⠄⠈⠉⣀⣴⣾⣿⡿⣿⣿⣿⠸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⠋⣴⣿⣿⣿⣿⣿⣿⠸⣿⣿⣿⠇⠛⠏⠁⠁⠁⠄⠊⣅⣾⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⠄⠀⡾⣿⣿⣿⣿⠇⠸⣿⣿⣿⠸⣿⣿⣿⣿⣿⣿⣿⣶⣬⣭⣶⣾⣿⣿⠏⣼⣿⣿⣿⠇⣸⣿⣿⣿⠀⣰⣿⠁⠠⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⣤⣀⠁⠀⠀⠁⠁⠁⠸⣿⣿⣿⠸⣿⣿⣿⣿⠱⣿⣿⣿⣿⣿⣿⣿⣿⠋⣼⣿⣿⣿⣿⠇⣿⣿⣿⣿⠁⠙⡿⠇⠀⡿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⠃⠀⠛⠀⣼⣿⣿⣿⠸⣿⣿⠻⣿⣷⠌⠻⣿⣿⣿⣿⠟⠡⣾⣿⠟⣼⣿⣿⠀⣿⣿⣿⣿⣿⣶⣤⠁⠀⠸⣿⣿⣿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⠈⠀⣴⣾⣿⣿⣿⠇⠸⣿⣿⣇⠻⣿⣿⣷⣦⣭⣭⣴⣾⣿⣿⣿⠡⣿⣿⣿⠀⣿⣿⣿⣿⣿⠿⠟⠃⠁⠸⣿⣿⣿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⠐⠠⠈⠉⠛⠛⠿⠇⠸⣿⣿⣿⠱⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠏⣼⣿⣿⣿⠀⣁⣤⠄⠀⣀⠒⣀⣤⣶⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣦⠌⠀⣦⠀⣼⣿⣿⣿⣇⠻⣿⣿⣿⣿⣿⣿⣿⣿⣿⠡⣿⣿⣿⣿⣄⠈⠛⠃⠐⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠁⠀⠡⣤⣿⣿⣿⣿⣿⠘⣿⣿⣿⣿⣿⣿⣿⣿⠟⠸⣿⣿⣿⣿⣿⣿⣦⠀⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⠀⠠⣿⣿⣿⣿⣿⣿⣿⠀⣿⣿⣿⣿⣿⣿⣿⣿⠇⡼⠿⠿⣿⣿⣿⣿⠟⠀⠠⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣄⠀⠈⠙⠛⠛⠙⠛⠛⠀⠻⡿⣿⣿⣿⣿⣿⣿⠃⠠⣤⠀⠀⣀⡉⡁⣀⣀⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣶⣶⣶⣶⣶⣶⣤⠁⠠⠈⡿⣿⣿⣿⣿⣷⣄⠁⠀⣹⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣦⠁⠈⣿⣿⣿⣿⣿⣿⠆⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠠⠠⣿⣿⣿⣿⣿⠟⠠⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠗⠀⠸⣿⣿⣿⡿⠡⠄⠡⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠛⠛⠛⠿⠟⠉⠛⠻⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⠉⢀⣠⣤⣶⣶⣶⣶⣶⣶⣤⣀⠢⢝⠻⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⡡⢀⣴⡿⢋⡴⢿⣿⣿⣿⣿⣿⣿⣿⢷⣦⡑⠈⡛⠿⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡏⡜⢠⣾⣿⣤⣋⣴⣿⣿⣿⣿⣿⣿⣿⣿⣷⣌⠻⣶⣦⣤⣤⣀⠉⠻⣿⣿⣿⡿⠿⢛⢛⡻⠿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⠿⠟⠟⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡟⠀⢀⣿⣿⣿⡿⠛⠛⠻⣿⣿⣿⡿⠛⠛⢿⣿⣿⣧⠉⠉⣁⣈⣉⣁⢀⣿⣿⢋⠄⣁⣴⣶⣄⠐⢌⢻⣿⣿{X}", ""),
+        ("", f"{G}⡏⠀⣴⣦⣄⠢⡙⢿⣿⣿⣿⣿⣿⣿⡇⠀⣼⣿⣿⣿⠅⠀⠀  ⢹⣿⡿⠁⠀⠀⠀⢹⣿⣿⡆⠀⣿⣿⣿⣿⣿⡟⠁⢀⣴⣿⣿⣿⣿⣷⡈⠎⢿⣿{X}", ""),
+        ("", f"{G}⡇⠀⣿⣿⣿⣷⣌⠀⠙⢿⣿⣿⣿⣿⠀⢀⣿⣿⣿⣿⠀⠀⠀  ⠀⠈⣿⡇⠀⠀⠀⠀⠈⢿⣿⡇⠁⢻⣿⣿⣿⡿⠁⢠⣾⣿⣿⣿⡿⢿⣿⣷⠀⠘⣿{X}", ""),
+        ("", f"{G}⣇⠀⢿⣿⣿⡟⣿⣷⣄⠀⠙⢿⣿⡇⠀⣸⣿⣿⡿⣿⡀⠀⠀⠀  ⢸⣿⣧⠀⠀⠀⠀⣸⡈⣿⣷⠀⡈⣿⣿⡿⠁⢀⣾⣿⣿⢩⣿⠁⣾⣿⣿⡆⠀⢿{X}", ""),
+        ("", f"{G}⣿⡀⠘⣿⣿⣿⡘⣿⣿⣷⣌⠂⠉⠁⢠⣿⣿⡟⣰⢿⣷⣤⣤⣴⣿⣿⣿⣷⣄⣠⣴⣿⣧⠸⣿⣧⡐⠢⠉⠁⢀⣾⣿⣿⡇⣼⣿⢸⣿⣿⣿⣇⠀⢸{X}", ""),
+        ("", f"{G}⣿⣷⡀⠸⣿⣿⣧⠸⣿⣿⣿⣿⣶⣶⣿⣿⠏⡰⢃⣾⣿⣿⣿⣿⡏⠀⠈⣿⣿⣿⣿⣿⣏⠳⣘⣿⣿⣷⣶⣾⣿⣿⣿⣿⢠⣿⣿⣿⣿⣿⣿⣿⠀⢸{X}", ""),
+        ("", f"{G}⣿⣿⡇⠀⣿⣿⣿⡄⡿⢿⣿⣿⣿⣿⣿⣷⣾⣷⣿⣿⣿⣿⣿⣿⣧⣀⣠⣿⣿⣿⣿⣿⣿⣷⣾⣿⣿⣿⣿⣿⣿⣿⣿⡇⠸⠋⢉⠉⡉⠛⠿⣿⠀⢸{X}", ""),
+        ("", f"{G}⣿⣿⡇⢀⣿⣿⣿⣧⢸⡘⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠁⢠⣾⣿⡄⠈⠀⠀⠀⠀ ⣾{X}", ""),
+        ("", f"{G}⣿⡟⠀⣸⣿⣿⣿⣿⣜⡇⢿⣧⠹⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣄⡉⠻⠇⠀⠰⠀⠀ ⣀⣾{X}", ""),
+        ("", f"{G}⣿⠃⢠⣿⣿⠿⠿⠿⢿⣿⠸⣿⣀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⢻⣿⣿⣿⣿⣿⣿⣿⣷⣄⠀⢣⢸⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⢰⠜⠋⠀⢀⡄⢰⣤⡀⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡟⣼⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⠀⠃⢻⣿⣿{X}", ""),
+        ("", f"{G}⣿⣆⠠⠀⡀⠀⠁⣿⣿⠟⠀⣽⣿⣿⣿⣿⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⢻⣿⣿⣿⣿⣿⢃⣿⣿⣿⡟⣸⣿⣿⣿⣿⡿⠋⢠⢃⣾⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣷⣶⠆⡄⠈⢉⣠⣴⣾⣿⢿⣿⣿⣿⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⢋⣴⣿⣿⣿⣿⣿⣿⢸⣿⣿⣿⠇⠛⢏⠉⠉⠁⠤⢊⣥⣾⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⢄⠀⢾⣿⣿⣿⣿⡇⢸⣿⣿⣿⢸⣿⣿⣿⣿⣿⣿⣿⣶⣬⣭⣶⣾⣿⣿⠏⣼⣿⣿⣿⡇⣸⣿⣿⣿⠀⣰⣿⡁⢠⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣤⣀⡀⠀⠀⠉⠉⠁⢸⣿⣿⣿⢸⣿⣿⣿⣿⡹⣿⣿⣿⣿⣿⣿⣿⣿⠋⣼⣿⣿⣿⣿⠇⣿⣿⣿⣿⡀⠹⢿⡇⠀⢿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⠃⠀⠛⠀⣼⣿⣿⣿⢸⣿⣿⢻⣿⣷⣌⠻⣿⣿⣿⣿⠟⣡⣾⣿⡟⣼⣿⣿⠀⣿⣿⣿⣿⣿⣶⣤⡀⠀⢸⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⠈⠀⣴⣾⣿⣿⣿⡇⢸⣿⣿⣇⢻⣿⣿⣷⣦⣭⣭⣴⣾⣿⣿⣿⢡⣿⣿⣿⠀⣿⣿⣿⣿⣿⠿⠟⠃⡀⢸⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⡐⠠⢈⡉⠛⠛⠿⡇⢸⣿⣿⣿⡜⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡏⣼⣿⣿⣿⠀⣁⣤⡄⠀⣀⣒⣀⣤⣶⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣦⡌⠀⣦⠀⣼⣿⣿⣿⣇⢻⣿⣿⣿⣿⣿⣿⣿⣿⣿⢁⣿⣿⣿⣿⣄⡈⠛⠃⠐⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠁⠀⢁⣤⣿⣿⣿⣿⣿⠘⣿⣿⣿⣿⣿⣿⣿⣿⡟⢸⣿⣿⣿⣿⣿⣿⣦⠀⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⠀⠠⣿⣿⣿⣿⣿⣿⣿⠀⣿⣿⣿⣿⣿⣿⣿⣿⡇⢼⠿⠿⣿⣿⣿⣿⠟⠀⢀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣄⠀⠈⣙⠛⠛⣛⣛⠛⠀⠻⢿⣿⣿⣿⣿⣿⣿⡃⢠⣤⠀⠀⣀⣉⣁⣀⣠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣶⣶⣶⣶⣶⣶⣤⡀⢀⠈⢿⣿⣿⣿⣿⣷⣄⠁⠀⣹⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣦⠁⠈⣿⣿⣿⣿⣿⣿⡆⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠠⢠⣿⣿⣿⣿⣿⠟⢀⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡗⠀⢸⣿⣿⣿⡿⢁⡄⣡⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
         ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⠰⠘⣿⣿⣿⠁⠎⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⠑⠈⠻⠇⠈⣸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
-        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣤⣀⣀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⡑⠈⠻⠇⠈⣸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{G}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣤⣀⣠⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
     ]
 
-    eq2 = "\u2550" * IW
     info = [
         f"{G}{N}GHOST-RECON{X}",
-        f"{Cy}v1.0.0  {D}Offensive Reconnaissance Framework{X}",
+        f"{Cy}v{VERSAO}  {D}Offensive Reconnaissance Framework{X}",
         f"{D}{hl}{X}",
         f"{W}By Gh0st-Bx1  {D}{bar}  github.com/Ghost-Bx1{X}",
         f"{D}{hl}{X}",
-        f"{D}DNS / SSL / HTTP / WAF / Ports / Subdomains / CT{X}",
-        f"{D}Pentest Recon Framework{X}",
+        f"{D}--dns  --ssl  --http  --waf  --tech  --headers{X}",
+        f"{D}--subdomains  --email  --ct  --github-dork{X}",
+        f"{D}--email-harvest  --portas  --completo{X}",
     ]
 
-    out = [f"{G}\u2554{eq2}\u2557{X}", f"{G}{VB}{sp}{VB}{X}"]
+    out = [f"{G}{TL}{eq}{TR}{X}", f"{G}{VB}{sp}{VB}{X}"]
     for left, center, right in ga:
         combined = left + center + right
         out.append(_row(combined))
     out.append(f"{G}{VB}{sp}{VB}{X}")
     for i in info:
         out.append(_row_l(i))
-    out += [f"{G}{VB}{sp}{VB}{X}", f"{G}\u255a{eq2}\u255d{X}"]
+    out += [f"{G}{VB}{sp}{VB}{X}", f"{G}{BL}{eq}{BR}{X}"]
     return "\n".join(out)
 
 
-BANNER = _build_banner().format(v=VERSAO)
+BANNER = _build_banner()
 
 C = {
     "R": "\033[91m", "G": "\033[92m", "Y": "\033[93m",
@@ -544,6 +561,42 @@ SUBDOMAINS_LISTA = [
     "idp", "saml", "ldap",
     "smtp-relay", "postmaster", "abuse",
     "autoconfig", "autoconfiguration",
+    # Infraestrutura adicional
+    "ssh", "sftp2", "ftp3", "ntp", "time", "radius",
+    "ldap2", "ad", "dc", "dc1", "dc2", "pdc",
+    "mx4", "mx5", "smtp5", "smtp6", "mta",
+    "mail4", "mail5", "mailin", "mailout",
+    # Nuvem e containers
+    "ecs", "eks", "gke", "az", "azure",
+    "gcr", "ecr", "harbor", "quay",
+    "helm", "rancher", "argocd", "flux",
+    # DevOps expandido
+    "sonar", "sonarqube", "trivy", "snyk",
+    "circle", "drone", "tekton", "actions",
+    "prometheus", "alertmanager", "loki", "tempo",
+    # Aplicacoes
+    "ticket", "tickets", "helpdesk", "service",
+    "servicedesk", "incident", "kb2", "faq",
+    "dl", "lists", "newsletter", "announce",
+    "forms", "survey", "crm2", "erp",
+    # Geograficos
+    "us1", "us2", "us-east", "us-west",
+    "eu1", "eu2", "eu-west", "eu-central",
+    "ap1", "ap2", "ap-south", "ap-northeast",
+    "sa", "ca", "au", "jp", "sg", "in",
+    # Numericos comuns
+    "web1", "web2", "web3",
+    "app1", "app2", "app3",
+    "srv1", "srv2", "srv3",
+    "node1", "node2", "node3",
+    "host1", "host2", "host3",
+    # Seguranca
+    "siem", "edr", "dlp", "ids", "ips",
+    "proxy2", "proxy3", "squid",
+    "cert", "pki", "ca", "ocsp", "crl",
+    # Monitoramento
+    "uptimerobot", "pingdom", "newrelic",
+    "datadog", "splunk", "sumologic",
 ]
 
 _lock = Lock()
@@ -622,7 +675,7 @@ def _resolver_dns(dominio, tipo="A", verbose=False):
             resolver.lifetime = 8
             resp = resolver.resolve(dominio, tipo)
             return [str(r).rstrip(".") for r in resp]
-        except dns.exception.NXDOMAIN:
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
             return []
         except Exception as e:
             _log(f"dnspython erro ({tipo}): {e}", "DEBUG", verbose_only=True, verbose=verbose)
@@ -671,20 +724,54 @@ def recon_dns(dominio, verbose=False):
         resultado["registros"]["CNAME"] = cname
         _log(f"  {'CNAME':6} -> {', '.join(cname)}", "OK")
 
-    # Verificar zone transfer (apenas indica, nao executa)
+    # DNSSEC check
+    if DNS_OK:
+        try:
+            resolver = dns.resolver.Resolver()
+            resolver.timeout = 5
+            resolver.lifetime = 8
+            resolver.use_edns(0, dns.flags.DO, 4096)
+            rrsig = resolver.resolve(dominio, "RRSIG")
+            if rrsig:
+                _log("DNSSEC: RRSIG presente - DNSSEC ativo", "OK")
+                resultado["dnssec"] = "ativo"
+        except Exception:
+            try:
+                ds = _resolver_dns(dominio, "DS", verbose)
+                if ds:
+                    _log("DNSSEC: registro DS encontrado", "OK")
+                    resultado["dnssec"] = "ds_presente"
+                else:
+                    _log("DNSSEC: nao configurado", "DEBUG", verbose_only=True, verbose=verbose)
+                    resultado["dnssec"] = "ausente"
+            except Exception:
+                resultado["dnssec"] = "ausente"
+
+    # Verificar zone transfer (tenta AXFR real)
     ns_list = resultado["registros"].get("NS", [])
     if ns_list:
         resultado["ns_autoritativo"] = ns_list
         _log(f"  Servidores NS: {', '.join(ns_list)}", "INFO")
-        # Verificar se NS permite transferencia de zona
-        for ns in ns_list[:2]:
+        resultado["axfr"] = []
+        for ns in ns_list[:3]:
             try:
                 ns_ip = socket.gethostbyname(ns)
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(3)
-                if sock.connect_ex((ns_ip, 53)) == 0:
-                    resultado["resumo"].append(f"Porta 53/TCP aberta em {ns} ({ns_ip}) - possivel AXFR")
+                tcp_aberto = sock.connect_ex((ns_ip, 53)) == 0
                 sock.close()
+                if tcp_aberto and DNS_OK:
+                    try:
+                        z = dns.zone.from_xfr(dns.query.xfr(ns_ip, dominio, timeout=5))
+                        nomes = sorted(z.nodes.keys())
+                        alerta = f"AXFR SUCESSO em {ns} ({ns_ip}) - {len(nomes)} registros expostos!"
+                        _log(alerta, "CRITICO")
+                        resultado["resumo"].append(alerta)
+                        resultado["axfr"].append({"ns": ns, "ip": ns_ip,
+                                                  "registros": [str(n) for n in nomes[:50]]})
+                    except Exception:
+                        resultado["resumo"].append(f"Porta 53/TCP aberta em {ns} ({ns_ip}) - AXFR recusado")
+                        _log(f"  53/TCP aberto em {ns} - AXFR recusado", "INFO")
             except Exception:
                 pass
 
@@ -836,7 +923,7 @@ def recon_ssl(dominio, porta=443, verbose=False):
                     if not_after:
                         try:
                             expira = datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
-                            agora = datetime.utcnow()
+                            agora = _utcnow()
                             dias = (expira - agora).days
                             resultado["certificado"]["dias_restantes"] = dias
                             if dias < 0:
@@ -983,6 +1070,33 @@ def recon_http(url, stealth=False, proxy=None, timeout=10, verbose=False):
         # Auditar headers de seguranca
         seg = _auditar_headers_seguranca(resp.headers, verbose)
         resultado["seguranca"] = seg
+
+        # Favicon hash (MD5)
+        try:
+            import hashlib
+            base_url = f"{resp.url.split('/')[0]}//{resp.url.split('/')[2]}"
+            fav_resp = sess.get(f"{base_url}/favicon.ico", timeout=timeout, allow_redirects=True)
+            if fav_resp.status_code == 200 and fav_resp.content:
+                fav_hash = hashlib.md5(fav_resp.content).hexdigest()
+                resultado["favicon_md5"] = fav_hash
+                _log(f"Favicon MD5: {fav_hash}", "INFO")
+        except Exception:
+            pass
+
+        # HTTP methods permitidos (OPTIONS)
+        try:
+            opt_resp = sess.options(resp.url, timeout=timeout)
+            allow = opt_resp.headers.get("Allow", opt_resp.headers.get("allow", ""))
+            if allow:
+                metodos = [m.strip() for m in allow.split(",")]
+                resultado["http_methods"] = metodos
+                perigosos = [m for m in metodos if m.upper() in ["PUT", "DELETE", "TRACE", "CONNECT", "PATCH"]]
+                if perigosos:
+                    _log(f"Metodos HTTP perigosos: {', '.join(perigosos)}", "ALERTA")
+                else:
+                    _log(f"Metodos HTTP: {', '.join(metodos)}", "INFO")
+        except Exception:
+            pass
 
     except requests.exceptions.SSLError:
         _log(f"SSL invalido em {url} - tentando HTTP", "ALERTA")
@@ -1166,7 +1280,15 @@ def escanear_portas(host, portas=None, timeout=1.5, threads=100, verbose=False):
         resultado["ip"] = host_ip
         _log(f"IP resolvido: {host_ip}", "INFO")
     except Exception:
-        host_ip = host
+        # fallback via dnspython/DoH
+        ips = _resolver_dns(host, "A", verbose)
+        if ips:
+            host_ip = ips[0]
+            resultado["ip"] = host_ip
+            _log(f"IP resolvido (fallback): {host_ip}", "INFO")
+        else:
+            _log(f"Nao foi possivel resolver IP de {host}", "ALERTA")
+            host_ip = host
 
     args = [(host_ip, p, timeout) for p in portas]
     abertas = []
@@ -1220,7 +1342,20 @@ def enumerar_subdomains(dominio, wordlist=None, threads=30, verbose=False):
     """Brute-force de subdomains via resolucao DNS em paralelo."""
     if wordlist is None:
         wordlist = SUBDOMAINS_LISTA
-    resultado = {"dominio": dominio, "encontrados": [], "total_testados": len(wordlist)}
+    resultado = {"dominio": dominio, "encontrados": [], "total_testados": len(wordlist),
+                 "wildcard": False}
+
+    # Detectar wildcard DNS antes de enumerar
+    import uuid
+    rand_sub = f"{uuid.uuid4().hex[:12]}.{dominio}"
+    try:
+        wildcard_ips = socket.gethostbyname_ex(rand_sub)[2]
+        if wildcard_ips:
+            _log(f"Wildcard DNS detectado em *.{dominio} -> {wildcard_ips[0]} (resultados podem ter falsos positivos)", "ALERTA")
+            resultado["wildcard"] = True
+            resultado["wildcard_ip"] = wildcard_ips[0]
+    except Exception:
+        pass
 
     args = [(dominio, sub) for sub in wordlist]
     encontrados = []
@@ -1238,6 +1373,13 @@ def enumerar_subdomains(dominio, wordlist=None, threads=30, verbose=False):
 
     _finalizar_progresso()
     encontrados.sort(key=lambda x: x["subdomain"])
+
+    # Filtrar wildcard se detectado
+    wildcard_ip = resultado.get("wildcard_ip")
+    if wildcard_ip:
+        encontrados = [s for s in encontrados if wildcard_ip not in s["ips"]]
+        _log(f"Wildcard filtrado - removendo entradas com IP {wildcard_ip}", "INFO")
+
     resultado["encontrados"] = encontrados
 
     if encontrados:
@@ -1458,6 +1600,505 @@ def buscar_ct_logs(dominio, limite=100, verbose=False):
 
 
 # ==============================================================================
+# MODULO: ASN / BGP
+# ==============================================================================
+
+def recon_asn(dominio, verbose=False):
+    resultado = {"dominio": dominio, "ip": None, "asn": None, "org": None,
+                 "country": None, "city": None, "cidr": []}
+    try:
+        ip = socket.gethostbyname(dominio)
+        resultado["ip"] = ip
+    except Exception:
+        ips = _resolver_dns(dominio, "A")
+        if ips:
+            ip = ips[0]
+            resultado["ip"] = ip
+        else:
+            _log("Nao foi possivel resolver IP para lookup ASN", "ERRO")
+            return resultado
+    try:
+        url = f"https://ipinfo.io/{ip}/json"
+        req = urllib.request.Request(
+            url, headers={"User-Agent": USER_AGENTS[0], "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        parts = data.get("org", "").split(" ", 1)
+        resultado["asn"]     = parts[0] if parts else None
+        resultado["org"]     = parts[1] if len(parts) > 1 else None
+        resultado["country"] = data.get("country")
+        resultado["city"]    = data.get("city")
+        resultado["region"]  = data.get("region")
+        resultado["hostname"]= data.get("hostname")
+        if data.get("org"):
+            _log(f"ASN: {data['org']}", "OK")
+        if data.get("country"):
+            _log(f"Pais/Cidade: {data.get('country')}/{data.get('city','?')}", "OK")
+        if data.get("hostname"):
+            _log(f"Hostname PTR: {data['hostname']}", "INFO")
+    except Exception as e:
+        _log(f"ipinfo.io erro: {e}", "INFO")
+    asn_num = resultado.get("asn", "") or ""
+    if asn_num.startswith("AS"):
+        try:
+            url2 = f"https://api.bgpview.io/asn/{asn_num[2:]}/prefixes"
+            req2 = urllib.request.Request(
+                url2, headers={"User-Agent": USER_AGENTS[0], "Accept": "application/json"})
+            with urllib.request.urlopen(req2, timeout=10) as resp2:
+                d2 = json.loads(resp2.read().decode())
+            if d2.get("status") == "ok":
+                pref = d2.get("data", {}).get("ipv4_prefixes", [])
+                cidrs = [p.get("prefix") for p in pref[:20] if p.get("prefix")]
+                resultado["cidr"] = cidrs
+                if cidrs:
+                    _log(f"CIDRs IPv4 ({len(cidrs)}): {', '.join(cidrs[:6])}", "OK")
+        except Exception:
+            pass
+    return resultado
+
+
+# ==============================================================================
+# MODULO: CLOUD BUCKET DISCOVERY
+# ==============================================================================
+
+_BUCKET_SUFIXOS = [
+    "", "www", "static", "assets", "media", "images", "img", "files",
+    "backup", "backups", "data", "dev", "staging", "test", "api", "cdn",
+    "upload", "uploads", "docs", "public", "storage", "app", "web", "logs",
+]
+
+
+def recon_s3_buckets(dominio, verbose=False):
+    resultado = {"dominio": dominio, "encontrados": []}
+    nome_base = dominio.split(".")[0]
+    nomes = {dominio.replace(".", "-"), nome_base}
+    for suf in _BUCKET_SUFIXOS:
+        if suf:
+            nomes.update([
+                f"{nome_base}-{suf}", f"{nome_base}.{suf}",
+                f"{suf}.{nome_base}", f"{suf}-{nome_base}",
+            ])
+    endpoints = []
+    for nome in list(nomes)[:40]:
+        endpoints.append(("AWS S3",  f"https://{nome}.s3.amazonaws.com"))
+        endpoints.append(("AWS S3",  f"https://s3.amazonaws.com/{nome}"))
+        endpoints.append(("GCS",     f"https://storage.googleapis.com/{nome}"))
+        endpoints.append(("Azure",   f"https://{nome}.blob.core.windows.net"))
+    _log(f"Testando {len(endpoints)} endpoints de cloud storage...", "INFO")
+    encontrados = []
+    for plataforma, url in endpoints[:80]:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENTS[0]})
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                status = resp.status
+                corpo  = resp.read(2048).decode("utf-8", errors="ignore")
+                if status in [200, 403]:
+                    listavel = (status == 200 and
+                                any(k in corpo for k in
+                                    ["ListBucketResult", "<Contents>", "<?xml"]))
+                    nivel = "CRITICO" if listavel else "ACHADO"
+                    _log(f"{'BUCKET LISTAVEL' if listavel else 'Bucket existe'}: "
+                         f"[{plataforma}] {url}", nivel)
+                    encontrados.append({"plataforma": plataforma, "url": url,
+                                        "status": status, "listavel": listavel})
+        except Exception:
+            pass
+    resultado["encontrados"] = encontrados
+    if not encontrados:
+        _log("Nenhum bucket exposto encontrado", "INFO")
+    return resultado
+
+
+# ==============================================================================
+# MODULO: CORS MISCONFIGURATION
+# ==============================================================================
+
+def recon_cors(url, stealth=False, proxy=None, timeout=10, verbose=False):
+    resultado = {"url": url, "vulneravel": False, "detalhes": []}
+    if not REQUESTS_OK:
+        _log("requests nao instalado - CORS check indisponivel", "ALERTA")
+        return resultado
+    if not url.startswith("http"):
+        url = "https://" + url
+    sess = _get_session(proxy, timeout)
+    ua   = _get_ua(stealth)
+    alvo_dom = url.split("/")[2] if "/" in url else url
+    origens = [
+        "https://evil.com",
+        "https://attacker.com",
+        f"https://evil.{alvo_dom}",
+        "null",
+        "http://localhost",
+    ]
+    for origem in origens:
+        try:
+            r    = sess.get(url, headers={"User-Agent": ua, "Origin": origem}, timeout=timeout)
+            acao = r.headers.get("Access-Control-Allow-Origin", "")
+            creds= r.headers.get("Access-Control-Allow-Credentials", "").lower()
+            if not acao:
+                continue
+            if acao == "*":
+                _log("CORS wildcard (*) — qualquer origem permitida", "ALERTA")
+                resultado["detalhes"].append({"origem": origem, "acao": acao,
+                                              "credentials": creds, "nivel": "MEDIO"})
+                resultado["vulneravel"] = True
+            elif acao == origem or acao == "null":
+                nivel = "CRITICO" if creds == "true" else "ALTO"
+                msg   = f"CORS reflete origem '{origem}'"
+                if creds == "true":
+                    msg += " + credentials=true (leitura de cookies!)"
+                _log(msg, nivel)
+                resultado["detalhes"].append({"origem": origem, "acao": acao,
+                                              "credentials": creds, "nivel": nivel})
+                resultado["vulneravel"] = True
+        except Exception:
+            pass
+    if not resultado["vulneravel"]:
+        _log("Nenhuma misconfiguracao CORS critica detectada", "INFO")
+    return resultado
+
+
+# ==============================================================================
+# MODULO: JS ENDPOINT EXTRACTION
+# ==============================================================================
+
+def extrair_endpoints_js(url, stealth=False, proxy=None, timeout=10, verbose=False):
+    resultado = {"url": url, "endpoints": [], "js_files": []}
+    if not REQUESTS_OK:
+        return resultado
+    if not url.startswith("http"):
+        url = "https://" + url
+    sess = _get_session(proxy, timeout)
+    ua   = _get_ua(stealth)
+    try:
+        r    = sess.get(url, headers={"User-Agent": ua}, timeout=timeout)
+        html = r.text
+    except Exception as e:
+        _log(f"Erro ao buscar pagina para extrator JS: {e}", "ERRO")
+        return resultado
+    base_url = "/".join(url.split("/")[:3])
+    js_refs  = re.findall(r'src=["\']([^"\']+\.js[^"\']{0,60})["\']', html, re.IGNORECASE)
+    js_urls  = []
+    for js in js_refs[:20]:
+        if js.startswith("http"):
+            js_urls.append(js)
+        elif js.startswith("/"):
+            js_urls.append(base_url + js)
+        else:
+            js_urls.append(url.rstrip("/") + "/" + js)
+    resultado["js_files"] = js_urls[:15]
+    _log(f"Arquivos JS encontrados: {len(js_urls)}", "INFO")
+    padroes = [
+        r'["\'](/api/[^"\'<>\s]{2,80})["\']',
+        r'fetch\(["\']([^"\'<>\s]{2,80})["\']',
+        r'axios\.[a-z]+\(["\']([^"\'<>\s]{2,80})["\']',
+        r'\.(?:get|post|put|delete)\(["\']([^"\'<>\s]{2,60})["\']',
+        r'url\s*[:=]\s*["\']([^"\'<>\s]{2,80})["\']',
+        r'endpoint\s*[:=]\s*["\']([^"\'<>\s]{2,80})["\']',
+        r'path\s*[:=]\s*["\']([/][^"\'<>\s]{1,60})["\']',
+        r'["\'](https?://[^"\'<>\s]{10,100})["\']',
+    ]
+    eps = set()
+    for p in padroes:
+        eps.update(re.findall(p, html, re.IGNORECASE)[:30])
+    for js_url in js_urls[:10]:
+        try:
+            r_js = sess.get(js_url, headers={"User-Agent": ua}, timeout=timeout)
+            content = r_js.text[:400000]
+            for p in padroes:
+                eps.update(re.findall(p, content, re.IGNORECASE)[:40])
+        except Exception:
+            pass
+    limpos = sorted({e for e in eps
+                     if len(e) > 3 and "/" in e
+                     and not e.endswith((".js", ".css", ".png", ".jpg", ".ico"))})[:100]
+    resultado["endpoints"] = limpos
+    if limpos:
+        _log(f"{len(limpos)} endpoint(s) extraido(s) de JS:", "ACHADO")
+        for ep in limpos[:15]:
+            _log(f"  {ep}", "OK")
+        if len(limpos) > 15:
+            _log(f"  ... e mais {len(limpos) - 15}", "INFO")
+    else:
+        _log("Nenhum endpoint JS encontrado", "INFO")
+    return resultado
+
+
+# ==============================================================================
+# MODULO: SHODAN
+# ==============================================================================
+
+def recon_shodan(ip, api_key, verbose=False):
+    resultado = {"ip": ip, "ports": [], "cves": [], "tags": [], "hostnames": []}
+    try:
+        url = f"https://api.shodan.io/shodan/host/{ip}?key={api_key}"
+        req = urllib.request.Request(
+            url, headers={"User-Agent": USER_AGENTS[0], "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+        resultado.update({
+            "ports":     data.get("ports", []),
+            "tags":      data.get("tags", []),
+            "hostnames": data.get("hostnames", []),
+            "org":       data.get("org", ""),
+            "os":        data.get("os", ""),
+            "country":   data.get("country_name", ""),
+        })
+        vulns = data.get("vulns", {})
+        resultado["cves"] = list(vulns.keys()) if isinstance(vulns, dict) else list(vulns)
+        if resultado["ports"]:
+            _log(f"Portas Shodan: {', '.join(str(p) for p in resultado['ports'][:20])}", "ACHADO")
+        if resultado["hostnames"]:
+            _log(f"Hostnames: {', '.join(resultado['hostnames'][:5])}", "OK")
+        if resultado["tags"]:
+            _log(f"Tags: {', '.join(resultado['tags'])}", "INFO")
+        if resultado["cves"]:
+            _log(f"CVEs Shodan: {len(resultado['cves'])} vulnerabilidade(s)", "CRITICO")
+            for cve in resultado["cves"][:8]:
+                _log(f"  {cve}", "ALERTA")
+        for item in data.get("data", [])[:3]:
+            porta = item.get("port")
+            prod  = item.get("product", "")
+            ver   = item.get("version", "")
+            if porta and prod:
+                _log(f"  Servico {porta}: {prod} {ver}", "INFO")
+    except Exception as e:
+        msg = str(e)
+        if "401" in msg or "403" in msg:
+            _log("Shodan: API key invalida ou sem creditos", "ERRO")
+        else:
+            _log(f"Shodan erro: {e}", "ERRO")
+    return resultado
+
+
+# ==============================================================================
+# MODULO: OPEN REDIRECT
+# ==============================================================================
+
+_OR_PARAMS = [
+    "url", "redirect", "redirect_url", "return", "return_url", "next",
+    "next_url", "goto", "destination", "dest", "redir", "r", "u",
+    "link", "out", "target", "forward", "location", "go", "continue",
+    "back", "returnUrl", "redirectUrl", "returnTo", "successUrl",
+]
+_OR_PAYLOADS = [
+    "https://evil.com",
+    "//evil.com",
+    "//evil.com/%2f%2e%2e",
+    "/\\evil.com",
+]
+
+
+def testar_open_redirect(url, stealth=False, proxy=None, timeout=8, verbose=False):
+    resultado = {"url": url, "vulneravel": False, "achados": []}
+    if not REQUESTS_OK:
+        return resultado
+    if not url.startswith("http"):
+        url = "https://" + url
+    sess = _get_session(proxy, timeout)
+    ua   = _get_ua(stealth)
+    base = url.rstrip("/")
+    _log(f"Testando {len(_OR_PARAMS)} parametros de redirect...", "INFO")
+    for param in _OR_PARAMS[:15]:
+        for payload in _OR_PAYLOADS:
+            test_url = f"{base}?{param}={urllib.parse.quote(payload, safe='')}"
+            try:
+                r = sess.get(test_url, allow_redirects=False, timeout=timeout,
+                             headers={"User-Agent": ua})
+                loc = r.headers.get("location", "") or r.headers.get("Location", "")
+                if loc and ("evil.com" in loc or loc.startswith("//")):
+                    resultado["achados"].append({
+                        "param": param, "payload": payload,
+                        "status": r.status_code, "location": loc,
+                    })
+                    resultado["vulneravel"] = True
+                    _log(f"Open Redirect: ?{param}={payload[:30]} -> {loc}", "CRITICO")
+            except Exception:
+                pass
+    if not resultado["vulneravel"]:
+        _log("Nenhum open redirect detectado", "INFO")
+    return resultado
+
+
+# ==============================================================================
+# MODULO: PASSIVE DNS
+# ==============================================================================
+
+def passive_dns(dominio, vt_key=None, verbose=False):
+    resultado = {"dominio": dominio, "subdomains": []}
+    if not vt_key:
+        try:
+            url = f"https://api.hackertarget.com/hostsearch/?q={urllib.parse.quote(dominio)}"
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENTS[0]})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                texto = resp.read().decode("utf-8", errors="ignore")
+            subs = []
+            for linha in texto.strip().split("\n"):
+                if "," in linha and not linha.startswith("error"):
+                    sub, ip2 = linha.split(",", 1)
+                    sub = sub.strip(); ip2 = ip2.strip()
+                    if sub.endswith(dominio):
+                        subs.append({"subdomain": sub, "ip": ip2})
+            resultado["subdomains"] = subs
+            if subs:
+                _log(f"{len(subs)} subdomains via HackerTarget passive DNS:", "ACHADO")
+                for s in subs[:15]:
+                    _log(f"  {s['subdomain']:45} -> {s['ip']}", "OK")
+            else:
+                _log("Passive DNS: sem resultados (HackerTarget)", "INFO")
+        except Exception as e:
+            _log(f"HackerTarget passive DNS erro: {e}", "ERRO")
+        return resultado
+    try:
+        url = (f"https://www.virustotal.com/api/v3/domains/"
+               f"{urllib.parse.quote(dominio)}/subdomains?limit=40")
+        req = urllib.request.Request(url, headers={"x-apikey": vt_key,
+                                                   "User-Agent": USER_AGENTS[0]})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+        subs = [{"subdomain": item.get("id", ""), "ip": ""}
+                for item in data.get("data", []) if item.get("id")]
+        resultado["subdomains"] = subs
+        _log(f"{len(subs)} subdomains via VirusTotal passive DNS:", "ACHADO")
+        for s in subs[:20]:
+            _log(f"  {s['subdomain']}", "OK")
+    except Exception as e:
+        _log(f"VirusTotal passive DNS erro: {e}", "ERRO")
+    return resultado
+
+
+# ==============================================================================
+# MODULO: RELATORIO HTML
+# ==============================================================================
+
+def gerar_relatorio_html(resultados, output_file):
+    alvo = resultados.get("alvo", "")
+    ts   = resultados.get("timestamp", "")
+    secoes = []
+
+    def _tbl(itens, colunas):
+        if not itens:
+            return "<p class='vazio'>Nenhum resultado.</p>"
+        h    = "".join(f"<th>{c}</th>" for c in colunas)
+        rows = "".join(
+            "<tr>" + "".join(f"<td>{str(i.get(c,''))}</td>" for c in colunas) + "</tr>"
+            for i in itens
+        )
+        return f"<table><thead><tr>{h}</tr></thead><tbody>{rows}</tbody></table>"
+
+    if "asn" in resultados:
+        d = resultados["asn"]
+        itens = [{"campo": k, "valor": str(v)} for k, v in d.items() if k != "cidr"]
+        if d.get("cidr"):
+            itens.append({"campo": "CIDRs", "valor": ", ".join(d["cidr"][:8])})
+        secoes.append(f"<section><h2>ASN / BGP</h2>{_tbl(itens, ['campo','valor'])}</section>")
+
+    if "dns" in resultados:
+        regs  = resultados["dns"].get("registros", {})
+        itens = [{"tipo": k, "valor": ", ".join(v[:3])} for k, v in regs.items()]
+        secoes.append(f"<section><h2>DNS</h2>{_tbl(itens, ['tipo','valor'])}</section>")
+
+    if "ssl" in resultados:
+        d    = resultados["ssl"]
+        cert = d.get("certificado", {})
+        itens = [
+            {"campo": "Protocolo",       "valor": d.get("protocolo", "")},
+            {"campo": "Expira",          "valor": cert.get("valido_ate", "")},
+            {"campo": "Dias restantes",  "valor": cert.get("dias_restantes", "")},
+            {"campo": "CN",              "valor": cert.get("sujeito", {}).get("commonName", "")},
+            {"campo": "SANs",            "valor": ", ".join(cert.get("sans", [])[:6])},
+        ]
+        secoes.append(f"<section><h2>SSL/TLS</h2>{_tbl(itens, ['campo','valor'])}</section>")
+
+    if "http" in resultados:
+        d         = resultados["http"]
+        wafs      = d.get("waf", [])
+        techs     = d.get("tecnologias", [])
+        seg       = d.get("seguranca", {})
+        ausentes  = seg.get("ausentes", []) if seg else []
+        score_pct = seg.get("score_pct", 0) if seg else 0
+        h = (f"<p><b>WAF/CDN:</b> {', '.join(w['nome'] for w in wafs) if wafs else 'Nenhum'}</p>"
+             f"<p><b>Tecnologias:</b> {', '.join(techs) if techs else 'N/D'}</p>"
+             f"<p><b>Security Headers Score:</b> {score_pct}%</p>"
+             + (f"<p><b>Headers ausentes:</b> {', '.join(ausentes)}</p>" if ausentes else ""))
+        secoes.append(f"<section><h2>HTTP Fingerprinting</h2>{h}</section>")
+
+    if "portas" in resultados:
+        abertas = resultados["portas"].get("abertas", [])
+        secoes.append(f"<section><h2>Portas Abertas ({len(abertas)})</h2>"
+                      f"{_tbl(abertas, ['porta','servico','banner'])}</section>")
+
+    if "subdomains" in resultados:
+        subs  = resultados["subdomains"].get("encontrados", [])
+        itens = [{"subdomain": s["subdomain"], "ips": ", ".join(s.get("ips", []))} for s in subs]
+        secoes.append(f"<section><h2>Subdomains ({len(subs)})</h2>"
+                      f"{_tbl(itens, ['subdomain','ips'])}</section>")
+
+    if "cors" in resultados and resultados["cors"].get("vulneravel"):
+        dets = resultados["cors"].get("detalhes", [])
+        secoes.append(f"<section><h2>CORS <span class='badge critico'>VULNERAVEL</span></h2>"
+                      f"{_tbl(dets, ['origem','acao','nivel'])}</section>")
+
+    if "js_endpoints" in resultados:
+        eps = resultados["js_endpoints"].get("endpoints", [])
+        secoes.append(f"<section><h2>JS Endpoints ({len(eps)})</h2>"
+                      f"{_tbl([{'endpoint': e} for e in eps[:50]], ['endpoint'])}</section>")
+
+    if "open_redirect" in resultados and resultados["open_redirect"].get("vulneravel"):
+        achados = resultados["open_redirect"].get("achados", [])
+        secoes.append(f"<section><h2>Open Redirect <span class='badge critico'>VULNERAVEL</span></h2>"
+                      f"{_tbl(achados, ['param','payload','status','location'])}</section>")
+
+    if "shodan" in resultados:
+        d     = resultados["shodan"]
+        itens = [
+            {"campo": "Org",    "valor": d.get("org", "")},
+            {"campo": "OS",     "valor": d.get("os", "")},
+            {"campo": "Pais",   "valor": d.get("country", "")},
+            {"campo": "Portas", "valor": ", ".join(str(p) for p in d.get("ports", []))},
+            {"campo": "CVEs",   "valor": ", ".join(d.get("cves", [])[:5])},
+        ]
+        secoes.append(f"<section><h2>Shodan</h2>{_tbl(itens, ['campo','valor'])}</section>")
+
+    if "ct_logs" in resultados:
+        ct_subs = resultados["ct_logs"].get("subdomains_ct", [])
+        secoes.append(f"<section><h2>CT Logs ({len(ct_subs)} subdomains)</h2>"
+                      f"{_tbl([{'subdomain': s} for s in ct_subs[:50]], ['subdomain'])}</section>")
+
+    html = (
+        "<!DOCTYPE html>\n<html lang='pt-BR'>\n<head>\n"
+        "<meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>\n"
+        f"<title>Ghost-Recon | {alvo}</title>\n"
+        "<style>\n"
+        "body{font-family:monospace;background:#0d1117;color:#c9d1d9;margin:0;padding:20px}\n"
+        "h1{color:#58a6ff;border-bottom:1px solid #30363d;padding-bottom:10px}\n"
+        "h2{color:#79c0ff;margin-top:0}\n"
+        "table{width:100%;border-collapse:collapse;margin-top:8px}\n"
+        "th{background:#161b22;color:#58a6ff;padding:7px;text-align:left;border:1px solid #30363d}\n"
+        "td{padding:5px 8px;border:1px solid #21262d;word-break:break-all;font-size:.9em}\n"
+        "tr:nth-child(even){background:#161b22}\n"
+        "section{background:#161b22;border:1px solid #30363d;border-radius:6px;"
+        "padding:14px;margin-bottom:16px}\n"
+        ".badge{padding:2px 8px;border-radius:3px;font-size:.75em;margin-left:8px}\n"
+        ".critico{background:#da3633;color:#fff}\n"
+        ".vazio{color:#6e7681;font-style:italic;font-size:.9em}\n"
+        ".meta{color:#8b949e;font-size:.85em;margin-bottom:16px}\n"
+        "</style></head>\n<body>\n"
+        f"<h1>Ghost-Recon v{VERSAO} | {alvo}</h1>\n"
+        f"<p class='meta'>Scan: {ts}</p>\n"
+        + "".join(secoes)
+        + "\n<footer style='margin-top:32px;color:#6e7681;font-size:.8em'>"
+          "By Gh0st-Bx1 | github.com/Ghost-Bx1</footer>\n</body>\n</html>"
+    )
+    try:
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write(html)
+        _log(f"Relatorio HTML salvo: {output_file}", "OK")
+    except Exception as e:
+        _log(f"Erro ao salvar HTML: {e}", "ERRO")
+
+
+# ==============================================================================
 # RELATORIO
 # ==============================================================================
 
@@ -1472,6 +2113,198 @@ def gerar_relatorio(resultados, output_file, verbose=False):
 
 
 # ==============================================================================
+# GITHUB DORK / EMAIL HARVEST
+# ==============================================================================
+
+def buscar_github_dorks(dominio, verbose=False):
+    """Busca segredos expostos em repositorios publicos do GitHub via API."""
+    resultado = {"dominio": dominio, "achados": [], "erro": None}
+    dorks = [
+        f'"{dominio}" password',
+        f'"{dominio}" api_key',
+        f'"{dominio}" secret',
+        f'"{dominio}" token',
+        f'"{dominio}" db_password',
+    ]
+    _secao("GITHUB DORK")
+    _log(f"Buscando segredos expostos para: {dominio}", "INFO")
+
+    for dork in dorks:
+        url = "https://api.github.com/search/code?q=" + requests.utils.quote(dork, safe="") + "&per_page=5"
+        try:
+            r = requests.get(url, headers={
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": "ghost-recon/2.1.0",
+            }, timeout=8)
+            if r.status_code == 200:
+                items = r.json().get("items", [])
+                for item in items:
+                    repo = item.get("repository", {}).get("full_name", "?")
+                    path = item.get("path", "?")
+                    html_url = item.get("html_url", "")
+                    resultado["achados"].append({
+                        "dork": dork,
+                        "repo": repo,
+                        "path": path,
+                        "url": html_url,
+                    })
+                    _log(f"EXPOSICAO: {repo}/{path}", "ACHADO")
+                    if verbose:
+                        print(f"    {html_url}")
+            elif r.status_code == 403:
+                _log("GitHub API rate limit atingido (unauthenticated). Use --gh-token para autenticar.", "ALERTA")
+                resultado["erro"] = "rate_limit"
+                break
+            elif r.status_code == 422:
+                continue
+        except Exception as e:
+            resultado["erro"] = str(e)
+            _log(f"Erro GitHub dork: {e}", "ERRO")
+            break
+
+    total = len(resultado["achados"])
+    _log(f"GitHub Dork: {total} achado(s) potencial(is)", "OK" if total == 0 else "ALERTA")
+    return resultado
+
+
+def extrair_emails(dominio, verbose=False):
+    """Extrai emails via pesquisa web (headers HTTP, paginas, CT logs)."""
+    resultado = {"dominio": dominio, "emails": [], "fontes": []}
+    emails_encontrados = set()
+    import re as _re_email
+
+    _secao("EMAIL HARVEST")
+    _log(f"Extraindo emails para: {dominio}", "INFO")
+
+    fontes_url = [
+        f"https://{dominio}",
+        f"https://www.{dominio}",
+        f"https://{dominio}/contact",
+        f"https://{dominio}/about",
+    ]
+
+    padrao = _re_email.compile(
+        r"[a-zA-Z0-9._%+\-]+@" + _re_email.escape(dominio), _re_email.IGNORECASE
+    )
+    padrao_generico = _re_email.compile(
+        r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", _re_email.IGNORECASE
+    )
+
+    for url in fontes_url:
+        try:
+            r = requests.get(url, timeout=6, headers={"User-Agent": "ghost-recon/2.1.0"},
+                             verify=False, allow_redirects=True)
+            encontrados = padrao.findall(r.text) + padrao_generico.findall(r.text)
+            for e in encontrados:
+                e_norm = e.lower().strip()
+                if dominio in e_norm and e_norm not in emails_encontrados:
+                    emails_encontrados.add(e_norm)
+                    resultado["fontes"].append(url)
+                    if verbose:
+                        _log(f"Email: {e_norm} (fonte: {url})", "ACHADO")
+        except Exception:
+            pass
+
+    # Via crt.sh (CT logs ja usados, mas pode ter emails em CN/SAN)
+    try:
+        r = requests.get(f"https://crt.sh/?q=%40{dominio}&output=json", timeout=8,
+                         headers={"User-Agent": "ghost-recon/2.1.0"})
+        if r.status_code == 200:
+            for entry in r.json():
+                cn = entry.get("name_value", "") + " " + entry.get("common_name", "")
+                for match in padrao.findall(cn):
+                    emails_encontrados.add(match.lower())
+    except Exception:
+        pass
+
+    resultado["emails"] = sorted(emails_encontrados)
+    _log(f"Email Harvest: {len(resultado['emails'])} email(s) encontrado(s)", "OK" if resultado['emails'] else "INFO")
+    for e in resultado["emails"]:
+        _log(f"  -> {e}", "ACHADO")
+    return resultado
+
+
+# ==============================================================================
+# MODULO: ROBOTS / SECURITY.TXT / SITEMAP
+# ==============================================================================
+
+def recon_robots(url, stealth=False, proxy=None, timeout=10, verbose=False):
+    """Busca robots.txt, security.txt e sitemap.xml do alvo."""
+    resultado = {"url": url, "robots": None, "security_txt": None,
+                 "sitemap": None, "disallow_paths": [], "interessante": []}
+
+    if not REQUESTS_OK:
+        _log("requests nao instalado - modulo robots limitado", "ALERTA")
+        return resultado
+
+    if not url.startswith("http"):
+        url = "https://" + url
+
+    sess = _get_session(proxy, timeout)
+    headers_req = {"User-Agent": random.choice(USER_AGENTS) if stealth else USER_AGENTS[0]}
+
+    base = f"{url.split('/')[0]}//{url.split('/')[2]}"
+
+    # robots.txt
+    try:
+        resp = sess.get(f"{base}/robots.txt", headers=headers_req,
+                        timeout=timeout, allow_redirects=True)
+        if resp.status_code == 200 and resp.text:
+            resultado["robots"] = resp.text[:5000]
+            linhas = resp.text.splitlines()
+            disallow = []
+            for linha in linhas:
+                l = linha.strip()
+                if l.lower().startswith("disallow:"):
+                    caminho = l[9:].strip()
+                    if caminho and caminho != "/":
+                        disallow.append(caminho)
+            resultado["disallow_paths"] = disallow[:50]
+            _log(f"robots.txt encontrado: {len(disallow)} caminhos Disallow", "OK")
+            # Caminhos interessantes
+            interessante_kw = ["admin", "api", "backup", "config", "db", "debug",
+                               "export", "internal", "private", "secret", "upload"]
+            for p in disallow:
+                if any(kw in p.lower() for kw in interessante_kw):
+                    _log(f"  Disallow interessante: {p}", "ACHADO")
+                    resultado["interessante"].append(p)
+        else:
+            _log("robots.txt: nao encontrado ou vazio", "DEBUG", verbose_only=True, verbose=verbose)
+    except Exception as e:
+        _log(f"robots.txt erro: {e}", "DEBUG", verbose_only=True, verbose=verbose)
+
+    # security.txt (RFC 9116)
+    for sec_path in ["/.well-known/security.txt", "/security.txt"]:
+        try:
+            resp2 = sess.get(f"{base}{sec_path}", headers=headers_req,
+                             timeout=timeout, allow_redirects=True)
+            if resp2.status_code == 200 and resp2.text:
+                resultado["security_txt"] = resp2.text[:2000]
+                _log(f"security.txt encontrado em {sec_path}", "OK")
+                for linha in resp2.text.splitlines():
+                    if linha.startswith("Contact:"):
+                        _log(f"  {linha}", "INFO")
+                break
+        except Exception:
+            pass
+
+    # sitemap.xml
+    for sm_path in ["/sitemap.xml", "/sitemap_index.xml", "/sitemap.xml.gz"]:
+        try:
+            resp3 = sess.get(f"{base}{sm_path}", headers=headers_req,
+                             timeout=timeout, allow_redirects=True)
+            if resp3.status_code == 200 and resp3.text:
+                contagem = resp3.text.count("<loc>")
+                resultado["sitemap"] = sm_path
+                _log(f"Sitemap encontrado em {sm_path} ({contagem} URLs)", "OK")
+                break
+        except Exception:
+            pass
+
+    return resultado
+
+
+# ==============================================================================
 # ORQUESTRADOR PRINCIPAL
 # ==============================================================================
 
@@ -1483,7 +2316,7 @@ def escanear(dominio, args):
     resultados = {
         "alvo": dominio_limpo,
         "url": url,
-        "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "timestamp": _utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "versao": VERSAO,
     }
 
@@ -1503,7 +2336,13 @@ def escanear(dominio, args):
     if executar_tudo or args.ssl:
         _secao("SSL/TLS")
         porta_ssl = 443
-        resultados["ssl"] = recon_ssl(dominio_limpo, porta=porta_ssl, verbose=args.verbose)
+        r_ssl = recon_ssl(dominio_limpo, porta=porta_ssl, verbose=args.verbose)
+        if r_ssl.get("erro") and not dominio_limpo.startswith("www."):
+            _log("SSL falhou no dominio raiz, tentando www...", "INFO")
+            r_ssl_www = recon_ssl(f"www.{dominio_limpo}", porta=porta_ssl, verbose=args.verbose)
+            if not r_ssl_www.get("erro"):
+                r_ssl = r_ssl_www
+        resultados["ssl"] = r_ssl
 
     # HTTP Fingerprinting (inclui WAF, tech, headers se --completo)
     if executar_tudo or args.http or args.waf or args.tech or args.headers:
@@ -1515,6 +2354,17 @@ def escanear(dominio, args):
             timeout=args.timeout,
             verbose=args.verbose,
         )
+        if r_http.get("erro") and not dominio_limpo.startswith("www."):
+            _log("HTTP falhou no dominio raiz, tentando www...", "INFO")
+            r_http2 = recon_http(
+                f"https://www.{dominio_limpo}",
+                stealth=args.stealth,
+                proxy=args.proxy,
+                timeout=args.timeout,
+                verbose=args.verbose,
+            )
+            if not r_http2.get("erro"):
+                r_http = r_http2
         resultados["http"] = r_http
 
         if not (executar_tudo or args.waf):
@@ -1557,6 +2407,13 @@ def escanear(dominio, args):
             threads=args.threads, verbose=args.verbose,
         )
 
+    # Robots / Security.txt / Sitemap
+    if executar_tudo or getattr(args, "robots", False):
+        _secao("ROBOTS / SECURITY.TXT / SITEMAP")
+        resultados["robots"] = recon_robots(
+            url, stealth=args.stealth, proxy=args.proxy,
+            timeout=args.timeout, verbose=args.verbose)
+
     # Email Security
     if executar_tudo or args.email:
         _secao("EMAIL SECURITY")
@@ -1567,6 +2424,61 @@ def escanear(dominio, args):
         _secao("CERTIFICATE TRANSPARENCY LOGS")
         limite = getattr(args, "ct_limite", 100)
         resultados["ct_logs"] = buscar_ct_logs(dominio_limpo, limite=limite, verbose=args.verbose)
+
+    # ASN / BGP
+    if executar_tudo or getattr(args, "asn", False):
+        _secao("ASN / BGP")
+        resultados["asn"] = recon_asn(dominio_limpo, verbose=args.verbose)
+
+    # Cloud Buckets
+    if executar_tudo or getattr(args, "s3", False):
+        _secao("CLOUD BUCKET DISCOVERY")
+        resultados["s3_buckets"] = recon_s3_buckets(dominio_limpo, verbose=args.verbose)
+
+    # CORS
+    if executar_tudo or getattr(args, "cors", False):
+        _secao("CORS MISCONFIGURATION")
+        resultados["cors"] = recon_cors(url, stealth=args.stealth, proxy=args.proxy,
+                                        timeout=args.timeout, verbose=args.verbose)
+
+    # JS Endpoints
+    if executar_tudo or getattr(args, "js", False):
+        _secao("JS ENDPOINT EXTRACTION")
+        resultados["js_endpoints"] = extrair_endpoints_js(
+            url, stealth=args.stealth, proxy=args.proxy,
+            timeout=args.timeout, verbose=args.verbose)
+
+    # Shodan
+    shodan_key = getattr(args, "shodan_key", None)
+    if shodan_key:
+        _secao("SHODAN LOOKUP")
+        try:
+            ip_alvo = socket.gethostbyname(dominio_limpo)
+            resultados["shodan"] = recon_shodan(ip_alvo, shodan_key, verbose=args.verbose)
+        except Exception as e:
+            _log(f"Shodan resolve erro: {e}", "ERRO")
+
+    # Open Redirect
+    if getattr(args, "openredirect", False):
+        _secao("OPEN REDIRECT SCAN")
+        resultados["open_redirect"] = testar_open_redirect(
+            url, stealth=args.stealth, proxy=args.proxy,
+            timeout=args.timeout, verbose=args.verbose)
+
+    # Passive DNS
+    if getattr(args, "passivedns", False):
+        _secao("PASSIVE DNS")
+        vt_key = getattr(args, "vt_key", None)
+        resultados["passive_dns"] = passive_dns(dominio_limpo, vt_key=vt_key,
+                                                verbose=args.verbose)
+
+    # GitHub Dork
+    if executar_tudo or getattr(args, "github_dork", False):
+        resultados["github_dork"] = buscar_github_dorks(dominio_limpo, verbose=args.verbose)
+
+    # Email Harvest
+    if executar_tudo or getattr(args, "email_harvest", False):
+        resultados["email_harvest"] = extrair_emails(dominio_limpo, verbose=args.verbose)
 
     # Sumario final
     _secao("SUMARIO")
@@ -1683,6 +2595,24 @@ def main():
                      help="Verificacao de seguranca de email (SPF/DKIM/DMARC)")
     grp.add_argument("--ct", action="store_true",
                      help="Certificate Transparency logs (crt.sh)")
+    grp.add_argument("--asn", action="store_true",
+                     help="Lookup ASN/BGP via ipinfo.io + bgpview.io")
+    grp.add_argument("--s3", action="store_true",
+                     help="Descoberta de S3/GCS/Azure buckets expostos")
+    grp.add_argument("--cors", action="store_true",
+                     help="Verificar CORS misconfiguration (Origin reflection)")
+    grp.add_argument("--js", action="store_true",
+                     help="Extrair endpoints de arquivos JS")
+    grp.add_argument("--openredirect", action="store_true",
+                     help="Testar open redirect em parametros comuns")
+    grp.add_argument("--passivedns", action="store_true",
+                     help="Passive DNS via HackerTarget (sem key) ou VirusTotal")
+    grp.add_argument("--github-dork", dest="github_dork", action="store_true",
+                     help="Buscar segredos expostos no GitHub (dork na API publica)")
+    grp.add_argument("--email-harvest", dest="email_harvest", action="store_true",
+                     help="Extrair emails do dominio (paginas + CT logs + scraping)")
+    grp.add_argument("--robots", action="store_true",
+                     help="Buscar robots.txt, security.txt e sitemap.xml")
 
     # Opcoes de porta
     grp_port = parser.add_argument_group("Opcoes de varredura de portas")
@@ -1717,12 +2647,24 @@ def main():
                            help="Modo furtivo: User-Agent aleatorio + delays")
     grp_geral.add_argument("--verbose", action="store_true",
                            help="Saida detalhada (debug)")
+    grp_geral.add_argument("--shodan-key", metavar="KEY", default=None,
+                           help="Shodan API key para lookup de host")
+    grp_geral.add_argument("--vt-key", metavar="KEY", default=None,
+                           help="VirusTotal API key para passive DNS")
+    grp_geral.add_argument("--html-output", metavar="FILE", default=None,
+                           help="Salvar relatorio HTML (ex: relatorio.html)")
 
     args = parser.parse_args()
 
     # Se nenhum modulo selecionado, mostrar ajuda rapida
     modulos = [args.dns, args.whois, args.ssl, args.http, args.waf, args.tech,
-               args.headers, args.portas, args.subdomains, args.email, args.ct, args.completo]
+               args.headers, args.portas, args.subdomains, args.email, args.ct,
+               args.asn, args.s3, args.cors, args.js, args.openredirect,
+               args.passivedns, args.completo,
+               getattr(args, "github_dork", False),
+               getattr(args, "email_harvest", False),
+               getattr(args, "robots", False),
+               bool(getattr(args, "shodan_key", None))]
     if not any(modulos):
         print(BANNER)
         print(f"\n{C['Y']}  [!] Nenhum modulo selecionado. Use --completo ou selecione modulos especificos.")
@@ -1752,6 +2694,10 @@ def main():
 
     if args.output:
         gerar_relatorio(resultados, args.output, verbose=args.verbose)
+
+    html_out = getattr(args, "html_output", None)
+    if html_out:
+        gerar_relatorio_html(resultados, html_out)
 
 
 if __name__ == "__main__":
