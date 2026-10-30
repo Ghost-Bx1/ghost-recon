@@ -81,7 +81,7 @@ try:
 except ImportError:
     DNS_OK = False
 
-VERSAO = "2.2.0"
+VERSAO = "2.3.0"
 
 
 def _utcnow():
@@ -1232,6 +1232,164 @@ def _auditar_headers_seguranca(headers, verbose=False):
         _log(f"  Score de headers: {score_pct}% ({resultado['score']}/{resultado['max_score']}) - REGULAR", "ALERTA")
     else:
         _log(f"  Score de headers: {score_pct}% ({resultado['score']}/{resultado['max_score']}) - FRACO", "CRITICO")
+
+    return resultado
+
+
+
+# ==============================================================================
+# MODULO: CMS FINGERPRINT (DEEP)
+# ==============================================================================
+
+def _http_get_simple(url, timeout=8, proxy=None):
+    """GET simples retornando (status, body_text, headers_dict) ou None em erro."""
+    import urllib.request as _urllib_req
+    import urllib.error as _urllib_err
+    try:
+        req = _urllib_req.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; ghost-recon)"})
+        with _urllib_req.urlopen(req, timeout=timeout) as r:
+            body = r.read(32768).decode("utf-8", errors="ignore")
+            return r.status, body, dict(r.headers)
+    except _urllib_err.HTTPError as e:
+        return e.code, "", {}
+    except Exception:
+        return None, "", {}
+
+
+def fingerprint_cms_deep(url_base, timeout=8, proxy=None, verbose=False):
+    """
+    Deep CMS fingerprinting:
+    - WordPress: versao, plugins instalados, temas, xmlrpc, user enum
+    - Drupal: versao via CHANGELOG/DRUPAL.txt, admin paths
+    - Joomla: versao via manifesto XML, componentes instalados
+    """
+    resultado = {"cms": None, "versao": None, "detalhes": {}}
+    _log("Iniciando deep CMS fingerprint...", "INFO")
+
+    # --- WordPress ---
+    wp_indicators = [
+        (f"{url_base}/wp-login.php", "wordpress"),
+        (f"{url_base}/wp-admin/", "wordpress"),
+        (f"{url_base}/wp-content/", "wordpress"),
+    ]
+    is_wp = False
+    for check_url, _ in wp_indicators:
+        st, _, _ = _http_get_simple(check_url, timeout=timeout)
+        if st and st in (200, 301, 302, 403):
+            is_wp = True
+            break
+
+    if is_wp:
+        resultado["cms"] = "WordPress"
+        _log("CMS: WordPress detectado", "ALERTA")
+
+        # Versao via /readme.html
+        for ver_path in ("/readme.html", "/license.txt"):
+            st, body, _ = _http_get_simple(f"{url_base}{ver_path}", timeout=timeout)
+            if st == 200 and body:
+                import re as _re_wp
+                m = _re_wp.search(r"[Vv]ersion\s*[:\-]?\s*(\d+\.\d+[\.\d]*)", body)
+                if m:
+                    resultado["versao"] = m.group(1)
+                    _log(f"WordPress versao: {resultado['versao']}", "INFO")
+                    break
+
+        # xmlrpc.php (pode ser explorado)
+        st_xml, _, _ = _http_get_simple(f"{url_base}/xmlrpc.php", timeout=timeout)
+        if st_xml == 200:
+            _log("xmlrpc.php acessivel - pode ser explorado (brute-force, SSRF, XXE)", "ALERTA")
+            resultado["detalhes"]["xmlrpc"] = True
+
+        # User enumeration via /?author=1
+        st_au, body_au, _ = _http_get_simple(f"{url_base}/?author=1", timeout=timeout)
+        if st_au and st_au in (200, 301, 302) and body_au:
+            import re as _re_au
+            m_au = _re_au.search(r'/author/([^/"]+)', body_au)
+            if m_au:
+                _log(f"User enum: autor ID=1 -> '{m_au.group(1)}'", "ALERTA")
+                resultado["detalhes"]["user_enum"] = m_au.group(1)
+
+        # Plugins instalados (bruteforce lista pequena)
+        WP_PLUGINS = [
+            "contact-form-7", "woocommerce", "yoast-seo", "akismet",
+            "elementor", "wordfence", "jetpack", "all-in-one-seo-pack",
+            "wp-super-cache", "duplicator", "really-simple-ssl",
+            "updraftplus", "classic-editor", "redirection",
+        ]
+        plugins_encontrados = []
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+
+        def _check_plugin(plugin):
+            purl = f"{url_base}/wp-content/plugins/{plugin}/readme.txt"
+            st, body, _ = _http_get_simple(purl, timeout=timeout)
+            if st == 200 and body:
+                import re as _re_p
+                m = _re_p.search(r"[Ss]table tag:\s*(\d+[\.\d]+)", body)
+                ver = m.group(1) if m else "?"
+                return plugin, ver
+            return None
+
+        with _TPE(max_workers=5) as ex:
+            for r in ex.map(_check_plugin, WP_PLUGINS):
+                if r:
+                    plugins_encontrados.append(r)
+                    _log(f"Plugin ativo: {r[0]} v{r[1]}", "INFO")
+
+        resultado["detalhes"]["plugins"] = plugins_encontrados
+
+    # --- Drupal ---
+    if not is_wp:
+        drupal_paths = [
+            "/CHANGELOG.txt", "/core/CHANGELOG.txt",
+            "/DRUPAL.txt", "/core/DRUPAL.txt",
+        ]
+        for dpath in drupal_paths:
+            st, body, _ = _http_get_simple(f"{url_base}{dpath}", timeout=timeout)
+            if st == 200 and body and "Drupal" in body[:500]:
+                resultado["cms"] = "Drupal"
+                import re as _re_dr
+                m = _re_dr.search(r"Drupal\s+(\d+\.\d+[\.\d]*)", body)
+                if m:
+                    resultado["versao"] = m.group(1)
+                _log(f"CMS: Drupal {resultado['versao'] or 'versao desconhecida'}", "ALERTA")
+                _log(f"CHANGELOG.txt exposto em {url_base}{dpath}", "ALERTA")
+                resultado["detalhes"]["changelog_exposto"] = dpath
+                # Admin paths padrao
+                for ap in ("/admin/", "/user/login", "/admin/config"):
+                    st_a, _, _ = _http_get_simple(f"{url_base}{ap}", timeout=timeout)
+                    if st_a in (200, 302, 403):
+                        _log(f"Admin path acessivel: {url_base}{ap} [{st_a}]", "INFO")
+                break
+
+    # --- Joomla ---
+    if not resultado["cms"]:
+        jm_path = "/administrator/manifests/files/joomla.xml"
+        st, body, _ = _http_get_simple(f"{url_base}{jm_path}", timeout=timeout)
+        if st == 200 and body and "<name>joomla</name>" in body.lower():
+            resultado["cms"] = "Joomla"
+            import re as _re_jm
+            m = _re_jm.search(r"<version>([^<]+)</version>", body)
+            if m:
+                resultado["versao"] = m.group(1).strip()
+            _log(f"CMS: Joomla {resultado['versao'] or 'versao desconhecida'}", "ALERTA")
+            _log(f"Manifesto exposto: {url_base}{jm_path}", "ALERTA")
+            resultado["detalhes"]["manifesto_exposto"] = True
+
+            # Componentes Joomla comuns
+            JOOMLA_COMPS = ["com_content", "com_users", "com_contact",
+                            "com_weblinks", "com_newsfeeds"]
+            comps = []
+            for comp in JOOMLA_COMPS:
+                comp_manifest = f"/administrator/manifests/packages/{comp}.xml"
+                st_c, _, _ = _http_get_simple(f"{url_base}{comp_manifest}", timeout=timeout)
+                if st_c == 200:
+                    comps.append(comp)
+                    if verbose:
+                        _log(f"Componente Joomla: {comp}", "INFO")
+            resultado["detalhes"]["componentes"] = comps
+
+    if not resultado["cms"]:
+        _log("Nenhum CMS conhecido detectado (WordPress/Drupal/Joomla)", "INFO")
 
     return resultado
 
@@ -2480,6 +2638,12 @@ def escanear(dominio, args):
     if executar_tudo or getattr(args, "email_harvest", False):
         resultados["email_harvest"] = extrair_emails(dominio_limpo, verbose=args.verbose)
 
+    # CMS Deep Fingerprint
+    if executar_tudo or getattr(args, "cms_deep", False):
+        _secao("CMS FINGERPRINT (DEEP)")
+        resultados["cms_deep"] = fingerprint_cms_deep(
+            url, timeout=args.timeout, proxy=args.proxy, verbose=args.verbose)
+
     # Sumario final
     _secao("SUMARIO")
     _imprimir_sumario(resultados, dominio_limpo)
@@ -2613,6 +2777,8 @@ def main():
                      help="Extrair emails do dominio (paginas + CT logs + scraping)")
     grp.add_argument("--robots", action="store_true",
                      help="Buscar robots.txt, security.txt e sitemap.xml")
+    grp.add_argument("--cms-deep", dest="cms_deep", action="store_true",
+                     help="Deep CMS fingerprint: WordPress plugins/temas/xmlrpc, Drupal versao, Joomla manifesto")
 
     # Opcoes de porta
     grp_port = parser.add_argument_group("Opcoes de varredura de portas")
@@ -2664,6 +2830,7 @@ def main():
                getattr(args, "github_dork", False),
                getattr(args, "email_harvest", False),
                getattr(args, "robots", False),
+               getattr(args, "cms_deep", False),
                bool(getattr(args, "shodan_key", None))]
     if not any(modulos):
         print(BANNER)
