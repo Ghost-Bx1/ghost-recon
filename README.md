@@ -1,139 +1,141 @@
 # Ghost-Recon
 
-> By Gh0st-Bx1 | [github.com/Ghost-Bx1](https://github.com/Ghost-Bx1)
+> Offensive reconnaissance framework - DNS, WHOIS, SSL, HTTP, WAF, port scanning, subdomain enumeration, and email security in one command.
 
-Framework de reconhecimento ofensivo completo para pentest e pesquisa de seguranca. Realiza enumeracao abrangente de um alvo em um unico comando.
+```
+  GHOST-RECON  v1.0.0  |  Offensive Reconnaissance Framework
+  By Gh0st-Bx1         |  github.com/Ghost-Bx1
+```
 
----
-
-## Funcionalidades
-
-| Modulo | Descricao |
-|---|---|
-| `--dns` | Registros A, AAAA, MX, NS, TXT, SOA, CAA + deteccao de zone transfer |
-| `--whois` | Informacoes WHOIS (registrar, datas, status, NS) |
-| `--ssl` | Certificado SSL/TLS: validade, emitente, SANs, protocolo, cipher |
-| `--http` | Fingerprinting HTTP: status, server, headers, redirecionamentos |
-| `--waf` | Deteccao de 13+ WAF/CDN (Cloudflare, AWS WAF, Akamai, Imperva, F5...) |
-| `--tech` | Identificacao de 25+ tecnologias (CMS, frameworks, linguagens, servidores) |
-| `--headers` | Auditoria de headers de seguranca (HSTS, CSP, X-Frame-Options, etc.) |
-| `--portas` | Varredura TCP com banner grabbing (60+ portas comuns) |
-| `--subdomains` | Brute-force DNS com wordlist embutida (150+ entradas) ou customizada |
-| `--email` | SPF, DKIM (14 seletores), DMARC, MTA-STS com score de seguranca |
-| `--ct` | Certificate Transparency logs via crt.sh |
-| `--completo` | Executa todos os modulos acima |
+![Python](https://img.shields.io/badge/Python-3.7%2B-blue?style=flat-square)
+![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows-lightgrey?style=flat-square)
+![Category](https://img.shields.io/badge/Category-Reconnaissance-blue?style=flat-square)
 
 ---
 
-## Instalacao
+## Overview
+
+Ghost-Recon runs a comprehensive passive and active reconnaissance sweep against a domain or IP. All modules can be run individually or combined with `--completo` for a full profile of the target.
+
+| Module        | Description                                                              |
+|---------------|--------------------------------------------------------------------------|
+| `--dns`       | A, AAAA, MX, NS, TXT, SOA, CAA records + zone transfer detection        |
+| `--whois`     | Registrar, creation date, expiry, status, nameservers                    |
+| `--ssl`       | Certificate validity, issuer, SANs, protocol version, cipher suite       |
+| `--http`      | HTTP fingerprinting: status, server header, redirects                    |
+| `--waf`       | WAF/CDN detection: Cloudflare, AWS WAF, Akamai, Imperva, F5 and 8 more  |
+| `--tech`      | Technology identification: CMS, frameworks, languages, web servers (25+) |
+| `--headers`   | Security header audit: HSTS, CSP, X-Frame-Options and more              |
+| `--portas`    | TCP port scan with banner grabbing (60+ common ports)                   |
+| `--subdomains`| DNS brute-force with 150+ built-in entries or custom wordlist            |
+| `--email`     | SPF, DKIM (14 selectors), DMARC, MTA-STS with security score            |
+| `--ct`        | Certificate transparency logs via crt.sh                                 |
+| `--completo`  | Run all modules                                                          |
+
+---
+
+## Requirements
+
+```
+Python 3.7+
+requests        (required)
+dnspython       (optional - improves DNS resolution)
+```
 
 ```bash
 pip install requests
-pip install dnspython  # opcional - melhora resolucao DNS
+pip install dnspython  # optional
 ```
-
-Python 3.7+ sem dependencias obrigatorias alem de `requests`.
 
 ---
 
-## Uso
+## Installation
 
 ```bash
-# Reconhecimento rapido (HTTP + WAF + tech + headers)
-python ghost-recon.py -d exemplo.com --http --waf --tech --headers
-
-# Analise completa
-python ghost-recon.py -d exemplo.com --completo
-
-# Enumeracao DNS + SSL
-python ghost-recon.py -d exemplo.com --dns --ssl
-
-# Brute-force de subdomains (threads agressivo)
-python ghost-recon.py -d exemplo.com --subdomains --threads 50
-
-# Brute-force com wordlist customizada
-python ghost-recon.py -d exemplo.com --subdomains --wordlist /path/lista.txt
-
-# Varredura de portas padrao
-python ghost-recon.py -d exemplo.com --portas
-
-# Portas especificas
-python ghost-recon.py -d exemplo.com --portas --portas-lista "22,80,443,3306,6379"
-
-# Seguranca de email
-python ghost-recon.py -d exemplo.com --email
-
-# CT logs (ate 200 certificados)
-python ghost-recon.py -d exemplo.com --ct --ct-limite 200
-
-# Completo + output JSON
-python ghost-recon.py -d exemplo.com --completo --output resultado.json
-
-# Modo furtivo com proxy
-python ghost-recon.py -d exemplo.com --completo --stealth --proxy http://127.0.0.1:8080
-
-# Verbose com rate limiting
-python ghost-recon.py -d exemplo.com --completo --verbose --rate-limit 5
+git clone https://github.com/Ghost-Bx1/ghost-recon
+cd ghost-recon
+pip install requests
 ```
 
 ---
 
-## Saida exemplo
+## Usage
 
-```
-   _____ _               _     ____
-  / ____| |             | |   |  _ \
- | |  __| |__   ___  ___| |_  | |_) | ___  ___ ___  _ __
- ...
+```bash
+# Quick recon (HTTP + WAF + tech + headers)
+python ghost-recon.py -d example.com --http --waf --tech --headers
 
-  [=] DNS RECON
-  [+]   A      -> 104.21.14.105, 172.67.138.40
-  [+]   MX     -> aspmx.l.google.com, alt1.aspmx.l.google.com
-  [+]   NS     -> ns1.cloudflare.com, ns2.cloudflare.com
+# Full sweep
+python ghost-recon.py -d example.com --completo
 
-  [=] WAF/CDN
-  [>] WAF/CDN detectado: Cloudflare (score=5)
+# DNS and SSL only
+python ghost-recon.py -d example.com --dns --ssl
 
-  [=] EMAIL SECURITY
-  [+] SPF: "v=spf1 include:_spf.google.com -all"
-  [!] DMARC p=none - somente monitoramento
-  Score email security: 2/4 - REGULAR
-```
+# Subdomain brute-force (aggressive thread count)
+python ghost-recon.py -d example.com --subdomains --threads 50
 
----
+# Subdomain brute-force with custom wordlist
+python ghost-recon.py -d example.com --subdomains --wordlist /path/list.txt
 
-## Opcoes completas
+# Port scan (default ports)
+python ghost-recon.py -d example.com --portas
 
-```
-opcoes:
-  -d DOMINIO            Dominio ou IP alvo
-  --completo            Executar todos os modulos
-  --dns                 Enumeracao DNS
-  --whois               Consulta WHOIS
-  --ssl                 Analise SSL/TLS
-  --http                Fingerprinting HTTP
-  --waf                 Deteccao de WAF/CDN
-  --tech                Identificacao de tecnologias
-  --headers             Auditoria de headers de seguranca
-  --portas              Varredura de portas TCP
-  --subdomains          Brute-force de subdomains
-  --email               Verificacao SPF/DKIM/DMARC
-  --ct                  Certificate Transparency logs
-  --portas-lista LISTA  Portas separadas por virgula
-  --portas-top50        Apenas top 50 portas
-  --wordlist FILE       Wordlist customizada para subdomains
-  --ct-limite N         Max certificados CT (padrao: 200)
-  --output FILE         Salvar resultados em JSON
-  --threads N           Threads (padrao: 50)
-  --timeout N           Timeout por conexao em segundos (padrao: 3.0)
-  --rate-limit N        Max requisicoes HTTP/segundo
-  --proxy URL           Proxy HTTP/HTTPS/SOCKS5
-  --stealth             User-Agent aleatorio
-  --verbose             Saida detalhada
+# Port scan - specific ports
+python ghost-recon.py -d example.com --portas --portas-lista "22,80,443,3306,6379"
+
+# Email security check (SPF/DKIM/DMARC)
+python ghost-recon.py -d example.com --email
+
+# Certificate transparency (up to 200 certs)
+python ghost-recon.py -d example.com --ct --ct-limite 200
+
+# Full sweep with JSON output
+python ghost-recon.py -d example.com --completo --output result.json
+
+# Stealth mode with proxy
+python ghost-recon.py -d example.com --completo --stealth --proxy http://127.0.0.1:8080
+
+# Verbose with rate limiting
+python ghost-recon.py -d example.com --completo --verbose --rate-limit 5
 ```
 
 ---
 
-## Aviso Legal
+## Reference
 
-Uso exclusivo para pesquisa de seguranca, pentest autorizado e fins educacionais. O uso nao autorizado contra sistemas de terceiros e ilegal. Os autores nao se responsabilizam pelo uso indevido.
+| Flag                | Description                                          |
+|---------------------|------------------------------------------------------|
+| `-d DOMAIN`         | Target domain or IP                                  |
+| `--completo`        | Run all modules                                      |
+| `--dns`             | DNS enumeration                                      |
+| `--whois`           | WHOIS lookup                                         |
+| `--ssl`             | SSL/TLS certificate analysis                         |
+| `--http`            | HTTP fingerprinting                                  |
+| `--waf`             | WAF/CDN detection                                    |
+| `--tech`            | Technology identification                            |
+| `--headers`         | Security header audit                                |
+| `--portas`          | TCP port scan                                        |
+| `--subdomains`      | Subdomain brute-force                                |
+| `--email`           | SPF/DKIM/DMARC verification                          |
+| `--ct`              | Certificate transparency logs                        |
+| `--portas-lista`    | Comma-separated port list                            |
+| `--portas-top50`    | Top 50 ports only                                    |
+| `--wordlist FILE`   | Custom wordlist for subdomain brute-force            |
+| `--ct-limite N`     | Max CT certificates to retrieve (default: 200)       |
+| `--output FILE`     | Save results to JSON                                 |
+| `--threads N`       | Thread count (default: 50)                           |
+| `--timeout N`       | Per-connection timeout in seconds (default: 3.0)     |
+| `--rate-limit N`    | Max HTTP requests per second                         |
+| `--proxy URL`       | HTTP/HTTPS/SOCKS5 proxy                              |
+| `--stealth`         | Randomize User-Agent                                 |
+| `--verbose`         | Verbose output                                       |
+
+---
+
+## Disclaimer
+
+For use in authorized environments only. Penetration testing, CTF competitions, and offensive security research with explicit permission from the environment owner. The author is not responsible for misuse.
+
+---
+
+**By [Gh0st-Bx1](https://github.com/Ghost-Bx1)**
