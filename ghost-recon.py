@@ -81,7 +81,7 @@ try:
 except ImportError:
     DNS_OK = False
 
-VERSAO = "2.3.0"
+VERSAO = "2.4.0"
 
 
 def _utcnow():
@@ -2463,6 +2463,306 @@ def recon_robots(url, stealth=False, proxy=None, timeout=10, verbose=False):
 
 
 # ==============================================================================
+# MODULO: GIT EXPOSURE
+# ==============================================================================
+
+GIT_PATHS = [
+    "/.git/HEAD",
+    "/.git/config",
+    "/.git/COMMIT_EDITMSG",
+    "/.git/description",
+    "/.git/info/exclude",
+    "/.git/logs/HEAD",
+    "/.gitignore",
+    "/.svn/entries",
+    "/.hg/hgrc",
+]
+
+def verificar_git_exposure(url_base, timeout=8, proxy=None, verbose=False):
+    """Verifica se repositorios git/svn/hg estao expostos publicamente."""
+    resultado = {"expostos": [], "critico": False}
+    if not url_base.startswith("http"):
+        url_base = "https://" + url_base
+    url_base = url_base.rstrip("/")
+
+    for path in GIT_PATHS:
+        status, body, _ = _http_get_simple(url_base + path, timeout=timeout, proxy=proxy)
+        if status in (200, 206):
+            pistas = False
+            if ".git/HEAD" in path and ("ref: refs/" in body or len(body) == 41):
+                pistas = True
+            elif ".git/config" in path and ("[core]" in body or "repositoryformatversion" in body):
+                pistas = True
+            elif ".git/COMMIT_EDITMSG" in path and len(body) > 3:
+                pistas = True
+            elif path in ("/.gitignore", "/.svn/entries", "/.hg/hgrc") and len(body) > 5:
+                pistas = True
+            elif ".git/" in path and len(body) > 5:
+                pistas = True
+
+            if pistas or status == 200:
+                resultado["expostos"].append({"path": path, "status": status,
+                                              "preview": body[:120].replace("\n", " ")})
+                resultado["critico"] = True
+                nivel = "CRITICO" if ".git/config" in path or ".git/HEAD" in path else "ALERTA"
+                _log(f"{path} ACESSIVEL [{status}] - {body[:60].strip()}", nivel)
+            elif verbose:
+                _log(f"{path} [{status}] sem conteudo indicativo", "INFO")
+        elif verbose:
+            _log(f"{path} [{status}]", "INFO")
+
+    if not resultado["expostos"]:
+        _log("Nenhum repositorio VCS exposto encontrado", "OK")
+    else:
+        _log(f"ATENCAO: {len(resultado['expostos'])} path(s) VCS exposto(s) - possivel exfiltracao de codigo-fonte!", "CRITICO")
+    return resultado
+
+
+# ==============================================================================
+# MODULO: ARQUIVOS SENSIVEIS
+# ==============================================================================
+
+ARQUIVOS_SENSIVEIS = [
+    ("/.env",                    "ENV vars / credenciais"),
+    ("/.env.backup",             "ENV backup"),
+    ("/.env.local",              "ENV local"),
+    ("/.env.production",         "ENV producao"),
+    ("/config.php",              "Config PHP"),
+    ("/wp-config.php.bak",       "WordPress config backup"),
+    ("/wp-config.php~",          "WordPress config swap"),
+    ("/configuration.php.bak",   "Joomla config backup"),
+    ("/settings.php.bak",        "Drupal settings backup"),
+    ("/backup.zip",              "Backup ZIP"),
+    ("/backup.tar.gz",           "Backup tarball"),
+    ("/backup.sql",              "Dump SQL"),
+    ("/db.sql",                  "Dump SQL db"),
+    ("/database.sql",            "Dump SQL database"),
+    ("/.htpasswd",               "HTTP Basic Auth credentials"),
+    ("/.htaccess",               "Apache config"),
+    ("/composer.json",           "Dependencias PHP (enum libs)"),
+    ("/package.json",            "Dependencias Node.js"),
+    ("/Gemfile",                 "Dependencias Ruby"),
+    ("/requirements.txt",        "Dependencias Python"),
+    ("/Dockerfile",              "Docker config"),
+    ("/docker-compose.yml",      "Docker Compose config"),
+    ("/server-status",           "Apache server-status"),
+    ("/phpinfo.php",             "PHP info disclosure"),
+    ("/info.php",                "PHP info disclosure"),
+    ("/test.php",                "PHP test file"),
+    ("/readme.txt",              "README (version disclosure)"),
+    ("/INSTALL.txt",             "Install instructions"),
+    ("/error_log",               "PHP/Apache error log"),
+    ("/debug.log",               "Debug log"),
+    ("/storage/logs/laravel.log","Laravel log"),
+    ("/.DS_Store",               "Mac metadata (enum dirs)"),
+    ("/crossdomain.xml",         "Flash crossdomain policy"),
+    ("/clientaccesspolicy.xml",  "Silverlight policy"),
+    ("/api/swagger.json",        "Swagger/OpenAPI spec"),
+    ("/swagger.json",            "Swagger/OpenAPI spec"),
+    ("/openapi.json",            "OpenAPI spec"),
+    ("/api-docs",                "API docs endpoint"),
+    ("/.well-known/security.txt","Security contact"),
+]
+
+def verificar_arquivos_sensiveis(url_base, timeout=8, proxy=None, verbose=False):
+    """Verifica arquivos e paths sensiveis expostos publicamente."""
+    resultado = {"encontrados": [], "critico": False}
+    if not url_base.startswith("http"):
+        url_base = "https://" + url_base
+    url_base = url_base.rstrip("/")
+
+    def _verificar(path, descricao):
+        status, body, headers = _http_get_simple(url_base + path, timeout=timeout, proxy=proxy)
+        if status in (200, 206):
+            ct = headers.get("Content-Type", headers.get("content-type", ""))
+            # Filtrar respostas que sao claramente paginas de erro customizadas
+            if "text/html" in ct and len(body) > 5000 and "<html" in body.lower():
+                if verbose:
+                    _log(f"{path} [{status}] mas parece pagina HTML customizada, ignorando", "INFO")
+                return
+            resultado["encontrados"].append({
+                "path": path, "descricao": descricao,
+                "status": status, "size": len(body),
+                "preview": body[:200].replace("\n", " "),
+            })
+            critico_paths = ("/.env", "/.htpasswd", "/backup", "/.sql", "wp-config", "settings.php")
+            nivel = "CRITICO" if any(c in path for c in critico_paths) else "ALERTA"
+            if nivel == "CRITICO":
+                resultado["critico"] = True
+            _log(f"{path} [{status}] {descricao} ({len(body)} bytes)", nivel)
+            if verbose and body:
+                _log(f"  Preview: {body[:100].strip()}", "INFO")
+
+    from concurrent.futures import ThreadPoolExecutor as _TPE
+    with _TPE(max_workers=10) as ex:
+        futs = {ex.submit(_verificar, p, d): (p, d) for p, d in ARQUIVOS_SENSIVEIS}
+        for f in futs:
+            try:
+                f.result()
+            except Exception:
+                pass
+
+    if not resultado["encontrados"]:
+        _log("Nenhum arquivo sensivel encontrado", "OK")
+    else:
+        _log(f"{len(resultado['encontrados'])} arquivo(s) sensivel(is) encontrado(s)!", "ALERTA")
+    return resultado
+
+
+# ==============================================================================
+# MODULO: SUBDOMAIN TAKEOVER
+# ==============================================================================
+
+TAKEOVER_FINGERPRINTS = [
+    ("GitHub Pages",    ["There isn't a GitHub Pages site here",
+                         "For root URLs (like http://example.com/) you must provide an index"]),
+    ("Heroku",          ["No such app", "herokucdn.com/error-pages/no-such-app.html"]),
+    ("Fastly",          ["Fastly error: unknown domain"]),
+    ("Shopify",         ["Sorry, this shop is currently unavailable",
+                         "Only one step away from your own online store"]),
+    ("Amazon S3",       ["NoSuchBucket", "The specified bucket does not exist"]),
+    ("Amazon CloudFront",["The request could not be satisfied", "ERROR: The request could not be satisfied"]),
+    ("Zendesk",         ["Help Center Closed"]),
+    ("Freshdesk",       ["May be this is still fresh!"]),
+    ("WordPress.com",   ["Do you want to register"]),
+    ("Cargo",           ["If you're moving your domain away from Cargo"]),
+    ("Tumblr",          ["There's nothing here.", "Whatever you were looking for doesn't live here"]),
+    ("Ghost",           ["The thing you were looking for is no longer here"]),
+    ("Surge.sh",        ["project not found"]),
+    ("Unbounce",        ["The requested URL was not found on this server"]),
+    ("HubSpot",         ["does not exist in our system"]),
+    ("Netlify",         ["Not Found - Request ID"]),
+    ("Bitbucket",       ["Repository not found"]),
+    ("WP Engine",       ["The site you were looking for couldn't be found"]),
+    ("Acquia",          ["Web Site Not Found"]),
+    ("Pantheon",        ["The gods are wise", "404 error unknown site!"]),
+]
+
+def verificar_subdomain_takeover(subdomains, timeout=8, proxy=None, verbose=False):
+    """Verifica CNAMEs de subdomains apontando para servicos deletados (takeover)."""
+    resultado = {"vulneraveis": [], "verificados": 0}
+    if not subdomains:
+        _log("Nenhum subdomain para verificar takeover", "INFO")
+        return resultado
+
+    def _checar(sub):
+        url = f"http://{sub}"
+        try:
+            status, body, _ = _http_get_simple(url, timeout=timeout, proxy=proxy)
+            if status is None:
+                return
+            resultado["verificados"] += 1
+            body_lower = body.lower() if body else ""
+            for servico, fingerprints in TAKEOVER_FINGERPRINTS:
+                for fp in fingerprints:
+                    if fp.lower() in body_lower:
+                        resultado["vulneraveis"].append({
+                            "subdomain": sub, "servico": servico,
+                            "fingerprint": fp, "status": status
+                        })
+                        _log(f"POSSIVEL TAKEOVER [{servico}]: {sub}", "CRITICO")
+                        return
+        except Exception:
+            pass
+
+    from concurrent.futures import ThreadPoolExecutor as _TPE
+    subs_lista = subdomains if isinstance(subdomains, list) else [subdomains]
+    with _TPE(max_workers=15) as ex:
+        list(ex.map(_checar, subs_lista[:200]))
+
+    if not resultado["vulneraveis"]:
+        _log(f"Nenhum subdomain vulneravel a takeover em {len(subs_lista)} verificados", "OK")
+    return resultado
+
+
+# ==============================================================================
+# MODULO: JS SECRETS
+# ==============================================================================
+
+JS_SECRETS_PATTERNS = [
+    ("AWS Access Key",    r"AKIA[0-9A-Z]{16}"),
+    ("AWS Secret Key",    r"['\"]?aws.?secret.?access.?key['\"]?\s*[=:]\s*['\"]([A-Za-z0-9/+]{40})['\"]"),
+    ("GitHub Token",      r"gh[pousr]_[A-Za-z0-9]{36,}"),
+    ("Slack Token",       r"xox[baprs]-[0-9A-Za-z-]{10,48}"),
+    ("Stripe Key",        r"sk_live_[0-9a-zA-Z]{24,}"),
+    ("Stripe PK",         r"pk_live_[0-9a-zA-Z]{24,}"),
+    ("Google API Key",    r"AIza[0-9A-Za-z\-_]{35}"),
+    ("Firebase URL",      r"https://[a-z0-9\-]+\.firebaseio\.com"),
+    ("Twilio SID",        r"AC[a-zA-Z0-9]{32}"),
+    ("Twilio Token",      r"SK[a-zA-Z0-9]{32}"),
+    ("SendGrid Key",      r"SG\.[a-zA-Z0-9\-_]{20,}\.[a-zA-Z0-9\-_]{20,}"),
+    ("JWT Token",         r"eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+"),
+    ("Generic API Key",   r"['\"]?api[_-]?key['\"]?\s*[=:]\s*['\"]([A-Za-z0-9\-_]{20,50})['\"]"),
+    ("Generic Secret",    r"['\"]?(?:secret|password|passwd|pwd)['\"]?\s*[=:]\s*['\"]([A-Za-z0-9@#$%!_\-]{8,50})['\"]"),
+    ("Bearer Token",      r"[Bb]earer\s+([A-Za-z0-9\-_\.]{20,})"),
+    ("Basic Auth",        r"[Bb]asic\s+([A-Za-z0-9+/]{20,}={0,2})"),
+    ("Private Key",       r"-----BEGIN (?:RSA |EC )?PRIVATE KEY-----"),
+    ("Heroku API Key",    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"),
+    ("MailChimp Key",     r"[0-9a-f]{32}-us[0-9]{1,2}"),
+    ("NPM Auth Token",    r"//registry\.npmjs\.org/:_authToken=([A-Za-z0-9\-_]{20,})"),
+]
+
+def extrair_secrets_js(url, stealth=False, proxy=None, timeout=10, verbose=False):
+    """Busca segredos (API keys, tokens, credenciais) em arquivos JS da aplicacao."""
+    resultado = {"secrets": [], "js_files_analisados": 0}
+    if not REQUESTS_OK:
+        return resultado
+    if not url.startswith("http"):
+        url = "https://" + url
+    sess = _get_session(proxy, timeout)
+    ua = _get_ua(stealth)
+
+    try:
+        r = sess.get(url, headers={"User-Agent": ua}, timeout=timeout)
+        html = r.text
+    except Exception as e:
+        _log(f"Erro ao buscar pagina para analise de secrets: {e}", "ERRO")
+        return resultado
+
+    base_url = "/".join(url.split("/")[:3])
+    js_refs = re.findall(r'src=["\']([^"\']+\.js[^"\']{0,60})["\']', html, re.IGNORECASE)
+    js_urls = []
+    for js in js_refs[:30]:
+        if js.startswith("http"):
+            js_urls.append(js)
+        elif js.startswith("//"):
+            js_urls.append("https:" + js)
+        elif js.startswith("/"):
+            js_urls.append(base_url + js)
+        else:
+            js_urls.append(url.rstrip("/") + "/" + js)
+
+    def _analisar_conteudo(content, fonte):
+        for nome, padrao in JS_SECRETS_PATTERNS:
+            for match in re.finditer(padrao, content):
+                val = match.group(0)[:100]
+                # Filtrar falsos positivos obvios
+                if val in ("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9", "EXAMPLE", "YOUR_KEY_HERE"):
+                    continue
+                resultado["secrets"].append({
+                    "tipo": nome, "valor": val, "fonte": fonte
+                })
+                _log(f"SECRET [{nome}]: {val[:60]}... em {fonte}", "CRITICO")
+
+    _analisar_conteudo(html, "HTML principal")
+
+    for js_url in js_urls[:15]:
+        try:
+            r_js = sess.get(js_url, headers={"User-Agent": ua}, timeout=timeout)
+            content = r_js.text[:500000]
+            resultado["js_files_analisados"] += 1
+            _analisar_conteudo(content, js_url.split("/")[-1][:40])
+        except Exception:
+            pass
+
+    if not resultado["secrets"]:
+        _log(f"Nenhum secret encontrado em {resultado['js_files_analisados']+1} arquivo(s)", "OK")
+    else:
+        _log(f"{len(resultado['secrets'])} secret(s) encontrado(s)!", "CRITICO")
+    return resultado
+
+
+# ==============================================================================
 # ORQUESTRADOR PRINCIPAL
 # ==============================================================================
 
@@ -2644,6 +2944,38 @@ def escanear(dominio, args):
         resultados["cms_deep"] = fingerprint_cms_deep(
             url, timeout=args.timeout, proxy=args.proxy, verbose=args.verbose)
 
+    # Git Exposure
+    if executar_tudo or getattr(args, "git_expose", False):
+        _secao("GIT / VCS EXPOSURE")
+        resultados["git_exposure"] = verificar_git_exposure(
+            url, timeout=args.timeout, proxy=args.proxy, verbose=args.verbose)
+
+    # Arquivos Sensiveis
+    if executar_tudo or getattr(args, "sensitive", False):
+        _secao("ARQUIVOS SENSIVEIS")
+        resultados["arquivos_sensiveis"] = verificar_arquivos_sensiveis(
+            url, timeout=args.timeout, proxy=args.proxy, verbose=args.verbose)
+
+    # JS Secrets
+    if executar_tudo or getattr(args, "js_secrets", False):
+        _secao("JS SECRETS")
+        resultados["js_secrets"] = extrair_secrets_js(
+            url, stealth=args.stealth, proxy=args.proxy,
+            timeout=args.timeout, verbose=args.verbose)
+
+    # Subdomain Takeover
+    subs_list = []
+    if "subdomains" in resultados:
+        subs_list = [s["subdomain"] for s in resultados["subdomains"].get("encontrados", [])]
+    elif "ct_logs" in resultados:
+        subs_list = resultados["ct_logs"].get("subdomains_ct", [])[:100]
+    if (executar_tudo or getattr(args, "takeover", False)) and subs_list:
+        _secao("SUBDOMAIN TAKEOVER CHECK")
+        resultados["takeover"] = verificar_subdomain_takeover(
+            subs_list, timeout=args.timeout, proxy=args.proxy, verbose=args.verbose)
+    elif getattr(args, "takeover", False) and not subs_list:
+        _log("Takeover check requer --subdomains ou --ct primeiro", "ALERTA")
+
     # Sumario final
     _secao("SUMARIO")
     _imprimir_sumario(resultados, dominio_limpo)
@@ -2730,8 +3062,10 @@ def main():
         ),
     )
 
-    parser.add_argument("-d", "--dominio", required=True,
+    parser.add_argument("-d", "--dominio", default=None,
                         help="Dominio ou IP alvo (ex: exemplo.com)")
+    parser.add_argument("--targets-file", metavar="FILE",
+                        help="Arquivo com alvos (um por linha) para scan em massa")
 
     # Modulos
     grp = parser.add_argument_group("Modulos de reconhecimento")
@@ -2779,6 +3113,14 @@ def main():
                      help="Buscar robots.txt, security.txt e sitemap.xml")
     grp.add_argument("--cms-deep", dest="cms_deep", action="store_true",
                      help="Deep CMS fingerprint: WordPress plugins/temas/xmlrpc, Drupal versao, Joomla manifesto")
+    grp.add_argument("--git-expose", dest="git_expose", action="store_true",
+                     help="Verificar repositorios VCS expostos (/.git/HEAD, /.git/config, etc.)")
+    grp.add_argument("--sensitive", action="store_true",
+                     help="Verificar arquivos sensiveis expostos (/.env, backup.zip, /.htpasswd, etc.)")
+    grp.add_argument("--js-secrets", dest="js_secrets", action="store_true",
+                     help="Extrair secrets de arquivos JS (AWS keys, tokens, JWT, API keys)")
+    grp.add_argument("--takeover", action="store_true",
+                     help="Verificar subdomain takeover (requer --subdomains ou --ct)")
 
     # Opcoes de porta
     grp_port = parser.add_argument_group("Opcoes de varredura de portas")
@@ -2819,8 +3161,30 @@ def main():
                            help="VirusTotal API key para passive DNS")
     grp_geral.add_argument("--html-output", metavar="FILE", default=None,
                            help="Salvar relatorio HTML (ex: relatorio.html)")
+    grp_geral.add_argument("--no-banner", action="store_true",
+                           help="Suprimir banner de inicio")
 
     args = parser.parse_args()
+
+    # Coletar alvos
+    alvos = []
+    if args.dominio:
+        alvos.append(args.dominio)
+    if getattr(args, "targets_file", None):
+        try:
+            with open(args.targets_file, "r", encoding="utf-8", errors="ignore") as f:
+                for linha in f:
+                    t = linha.strip()
+                    if t and not t.startswith("#"):
+                        alvos.append(t)
+        except Exception as e:
+            print(f"  [ERRO] targets-file: {e}")
+            sys.exit(1)
+    alvos = list(dict.fromkeys(alvos))
+    if not alvos:
+        print(BANNER)
+        parser.print_help()
+        sys.exit(0)
 
     # Se nenhum modulo selecionado, mostrar ajuda rapida
     modulos = [args.dns, args.whois, args.ssl, args.http, args.waf, args.tech,
@@ -2831,16 +3195,21 @@ def main():
                getattr(args, "email_harvest", False),
                getattr(args, "robots", False),
                getattr(args, "cms_deep", False),
+               getattr(args, "git_expose", False),
+               getattr(args, "sensitive", False),
+               getattr(args, "js_secrets", False),
+               getattr(args, "takeover", False),
                bool(getattr(args, "shodan_key", None))]
     if not any(modulos):
         print(BANNER)
         print(f"\n{C['Y']}  [!] Nenhum modulo selecionado. Use --completo ou selecione modulos especificos.")
-        print(f"  [!] Exemplo: python ghost-recon.py -d {args.dominio} --completo{C['X']}\n")
+        print(f"  [!] Exemplo: python ghost-recon.py -d {alvos[0]} --completo{C['X']}\n")
         parser.print_help()
         sys.exit(0)
 
-    print(BANNER)
-    print(f"  {C['C']}Alvo     : {C['N']}{args.dominio}{C['X']}")
+    if not getattr(args, "no_banner", False):
+        print(BANNER)
+    print(f"  {C['C']}Alvos    : {C['N']}{', '.join(alvos)}{C['X']}")
     print(f"  {C['C']}Threads  : {C['N']}{args.threads}{C['X']}")
     print(f"  {C['C']}Timeout  : {C['N']}{args.timeout}s{C['X']}")
     print(f"  {C['C']}Stealth  : {C['N']}{'Sim' if args.stealth else 'Nao'}{C['X']}")
@@ -2854,7 +3223,18 @@ def main():
         urllib3.disable_warnings()
 
     inicio = time.time()
-    resultados = escanear(args.dominio, args)
+    # Multi-target support
+    if len(alvos) == 1:
+        args.dominio = alvos[0]
+        resultados = escanear(alvos[0], args)
+    else:
+        resultados = {}
+        for alvo in alvos:
+            print(f"\n  {C['C']}[>] Escaneando: {C['N']}{alvo}{C['X']}")
+            args.dominio = alvo
+            resultados[alvo] = escanear(alvo, args)
+        # flatten para relatorio (usa o ultimo alvo para output unico)
+        resultados = resultados[alvos[-1]] if len(alvos) > 0 else {}
     elapsed = time.time() - inicio
 
     print(f"\n  {C['G']}{C['N']}[+] Concluido em {elapsed:.1f}s{C['X']}")
