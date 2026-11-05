@@ -132,6 +132,27 @@ python ghost-recon.py -d example.com --completo --verbose --rate-limit 5
 
 ---
 
+## Roadmap
+
+Improvements planned based on analysis of amass, subfinder, httpx and nuclei:
+
+| Priority | Feature | Description |
+|----------|---------|-------------|
+| High | JavaScript file analysis | Extract API endpoints, secrets, tokens from inline and linked JS files found during HTTP scan |
+| High | Shodan InternetDB enrichment | For each discovered IP, pull open ports, CVEs and tags without an API key |
+| High | Wayback Machine URL harvest | Extract historical endpoints via CDX API; reveals old paths, forgotten admin panels |
+| High | Subdomain takeover detection | CNAME chain check on all discovered subdomains for unclaimed services (S3, GitHub Pages, Heroku, Shopify) |
+| High | API spec discovery | Check for `swagger.json`, `openapi.yaml`, `.well-known/api/`, `api-docs`, `/graphql` on discovered hosts |
+| High | Favicon hash fingerprinting | Compute MurmurHash3 of target favicon for Shodan-style technology correlation |
+| Medium | Cloud asset discovery | Generate bucket name permutations for target and probe S3/GCS/Azure Blob HEAD requests |
+| Medium | Google Analytics ID correlation | Extract GA/GTM IDs from pages; find other domains using the same ID |
+| Medium | Email harvesting from web pages | Regex scrape of `mailto:` links and email patterns in discovered pages |
+| Medium | Autonomous crawler | Follow internal links up to configurable depth (`--crawl-depth 2`) to expand attack surface |
+| Medium | Screenshot capture | Invoke `chromium --headless` or `cutycapt` on discovered HTTP services (`--screenshot`) |
+| Low | Mobile app lookup | Check iOS App Store / Google Play for apps belonging to target domain |
+| Low | Reverse DNS on discovered IPs | PTR lookup on every found IP to uncover sibling domains hosted on same infrastructure |
+| Low | BGP/routing analysis | Enumerate all CIDR blocks registered to target ASN for expanded scope |
+
 ## Disclaimer
 
 For use in authorized environments only. Penetration testing, CTF competitions, and offensive security research with explicit permission from the environment owner. The author is not responsible for misuse.
