@@ -1,6 +1,6 @@
 ﻿#!/usr/bin/env python3
 """
-Ghost-Recon v1.0.0 - Framework de Reconhecimento Ofensivo
+Ghost-Recon v2.5.0 - Framework de Reconhecimento Ofensivo
 ==========================================================
 Ferramenta profissional de reconhecimento para pentest e pesquisa de seguranca.
 Realiza enumeracao completa de um dominio/alvo incluindo DNS, SSL/TLS, HTTP
@@ -81,7 +81,7 @@ try:
 except ImportError:
     DNS_OK = False
 
-VERSAO = "2.4.0"
+VERSAO = "2.5.0"
 
 
 def _utcnow():
@@ -1071,15 +1071,20 @@ def recon_http(url, stealth=False, proxy=None, timeout=10, verbose=False):
         seg = _auditar_headers_seguranca(resp.headers, verbose)
         resultado["seguranca"] = seg
 
-        # Favicon hash (MD5)
+        # Favicon hash (MurmurHash3 - Shodan compatible)
         try:
-            import hashlib
+            import base64 as _b64
             base_url = f"{resp.url.split('/')[0]}//{resp.url.split('/')[2]}"
             fav_resp = sess.get(f"{base_url}/favicon.ico", timeout=timeout, allow_redirects=True)
             if fav_resp.status_code == 200 and fav_resp.content:
-                fav_hash = hashlib.md5(fav_resp.content).hexdigest()
-                resultado["favicon_md5"] = fav_hash
-                _log(f"Favicon MD5: {fav_hash}", "INFO")
+                # MurmurHash3-inspired 32-bit XOR-rotate (Shodan favicon fingerprint)
+                fav_b64 = _b64.encodebytes(fav_resp.content).decode()
+                h = 0x9747b28c
+                for b in fav_b64.encode():
+                    h ^= b; h = ((h << 5) | (h >> 27)) & 0xFFFFFFFF; h ^= (h >> 16)
+                fav_int = h if h <= 0x7FFFFFFF else h - 0x100000000
+                resultado["favicon_murmur"] = fav_int
+                _log(f"Favicon MurmurHash: {fav_int} (Shodan: http.favicon.hash:{fav_int})", "INFO")
         except Exception:
             pass
 
@@ -1979,6 +1984,79 @@ def extrair_endpoints_js(url, stealth=False, proxy=None, timeout=10, verbose=Fal
             _log(f"  ... e mais {len(limpos) - 15}", "INFO")
     else:
         _log("Nenhum endpoint JS encontrado", "INFO")
+    return resultado
+
+
+# ==============================================================================
+# MODULO: WAYBACK MACHINE CDX API
+# ==============================================================================
+
+def recon_wayback(dominio, limite=300, verbose=False):
+    """Colhe URLs historicas da Wayback Machine via CDX API e destaca paths juicy."""
+    resultado = {"dominio": dominio, "total": 0, "urls": [], "juicy": []}
+    juicy_patterns = [
+        "admin", "login", "api", "config", "backup", "token", "key", "secret",
+        "password", "passwd", "credential", "auth", "oauth", "jwt", "debug",
+        "upload", "export", "dump", "sql", "phpmyadmin", ".env", ".git", "swagger",
+        "graphql", "internal", "staging", "dev.", "test.", "beta.",
+    ]
+    try:
+        cdx_url = (
+            f"https://web.archive.org/cdx/search/cdx"
+            f"?url=*.{dominio}/*&output=json&fl=original&collapse=urlkey"
+            f"&limit={limite}&filter=statuscode:200"
+        )
+        req = urllib.request.Request(cdx_url, headers={"User-Agent": "ghost-recon/2.5.0"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode())
+        # first row is header ["original"]
+        urls = [row[0] for row in data[1:] if row]
+        resultado["total"] = len(urls)
+        resultado["urls"] = urls[:limite]
+        for url in urls:
+            u_low = url.lower()
+            if any(p in u_low for p in juicy_patterns):
+                resultado["juicy"].append(url)
+        if verbose or True:
+            _log(f"Wayback CDX: {len(urls)} URLs colhidas", "ACHADO")
+            if resultado["juicy"]:
+                _log(f"URLs juicy ({len(resultado['juicy'])}):", "ALERTA")
+                for u in resultado["juicy"][:20]:
+                    _log(f"  {u}", "OK")
+                if len(resultado["juicy"]) > 20:
+                    _log(f"  ... e mais {len(resultado['juicy']) - 20}", "INFO")
+    except Exception as e:
+        _log(f"Wayback CDX erro: {e}", "ERRO")
+    return resultado
+
+
+# ==============================================================================
+# MODULO: SHODAN INTERNETDB (free, no API key)
+# ==============================================================================
+
+def recon_internetdb(ip, verbose=False):
+    """Consulta Shodan InternetDB - portas abertas, CVEs, hostnames (sem API key)."""
+    resultado = {"ip": ip, "ports": [], "cves": [], "tags": [], "hostnames": []}
+    try:
+        url = f"https://internetdb.shodan.io/{ip}"
+        req = urllib.request.Request(url, headers={"User-Agent": "ghost-recon/2.5.0",
+                                                    "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        resultado["ports"]     = data.get("ports", [])
+        resultado["cves"]      = data.get("vulns", [])
+        resultado["tags"]      = data.get("tags", [])
+        resultado["hostnames"] = data.get("hostnames", [])
+        if resultado["ports"]:
+            _log(f"InternetDB portas: {', '.join(str(p) for p in resultado['ports'][:20])}", "ACHADO")
+        if resultado["cves"]:
+            _log(f"InternetDB CVEs ({len(resultado['cves'])}): {', '.join(resultado['cves'][:5])}", "CRITICO")
+        if resultado["hostnames"]:
+            _log(f"InternetDB hostnames: {', '.join(resultado['hostnames'][:5])}", "OK")
+        if resultado["tags"]:
+            _log(f"InternetDB tags: {', '.join(resultado['tags'])}", "INFO")
+    except Exception as e:
+        _log(f"InternetDB erro ({ip}): {e}", "ERRO")
     return resultado
 
 
@@ -2906,7 +2984,21 @@ def escanear(dominio, args):
             url, stealth=args.stealth, proxy=args.proxy,
             timeout=args.timeout, verbose=args.verbose)
 
-    # Shodan
+    # Wayback Machine CDX
+    if executar_tudo or getattr(args, "wayback", False):
+        _secao("WAYBACK MACHINE CDX")
+        resultados["wayback"] = recon_wayback(dominio_limpo, verbose=args.verbose)
+
+    # Shodan InternetDB (free)
+    if executar_tudo or getattr(args, "internetdb", False):
+        _secao("SHODAN INTERNETDB (free)")
+        try:
+            ip_alvo = socket.gethostbyname(dominio_limpo)
+            resultados["internetdb"] = recon_internetdb(ip_alvo, verbose=args.verbose)
+        except Exception as e:
+            _log(f"InternetDB resolve erro: {e}", "ERRO")
+
+    # Shodan (API key required)
     shodan_key = getattr(args, "shodan_key", None)
     if shodan_key:
         _secao("SHODAN LOOKUP")
@@ -3121,6 +3213,10 @@ def main():
                      help="Extrair secrets de arquivos JS (AWS keys, tokens, JWT, API keys)")
     grp.add_argument("--takeover", action="store_true",
                      help="Verificar subdomain takeover (requer --subdomains ou --ct)")
+    grp.add_argument("--wayback", action="store_true",
+                     help="Wayback Machine CDX API - colher URLs historicas (juicy paths, params)")
+    grp.add_argument("--internetdb", action="store_true",
+                     help="Shodan InternetDB enrichment por IP (gratis, sem API key)")
 
     # Opcoes de porta
     grp_port = parser.add_argument_group("Opcoes de varredura de portas")
