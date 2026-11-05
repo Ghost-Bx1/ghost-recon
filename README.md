@@ -1,6 +1,6 @@
 # Ghost-Recon
 
-> Offensive reconnaissance framework - DNS, WHOIS, SSL, HTTP, WAF, port scanning, subdomain enumeration, and email security in one command.
+> Offensive reconnaissance framework - DNS, SSL, WAF, subdomain enumeration, and email security.
 
 ```
   GHOST-RECON  v1.0.0  |  Offensive Reconnaissance Framework
@@ -152,6 +152,23 @@ Improvements planned based on analysis of amass, subfinder, httpx and nuclei:
 | Low | Mobile app lookup | Check iOS App Store / Google Play for apps belonging to target domain |
 | Low | Reverse DNS on discovered IPs | PTR lookup on every found IP to uncover sibling domains hosted on same infrastructure |
 | Low | BGP/routing analysis | Enumerate all CIDR blocks registered to target ASN for expanded scope |
+
+## Ghost Toolkit
+
+| Tool | Description |
+|------|-------------|
+| [ghost-ad](https://github.com/Ghost-Bx1/ghost-ad) | Active Directory - LDAP, Kerberoasting, AS-REP Roasting, BloodHound-lite |
+| [ghost-cloud](https://github.com/Ghost-Bx1/ghost-cloud) | Cloud Security - AWS, Azure and GCP misconfiguration scanner |
+| [ghost-fuzz](https://github.com/Ghost-Bx1/ghost-fuzz) | Web Fuzzing - directory brute-force, parameter fuzzing, vhost enumeration |
+| [ghost-osint](https://github.com/Ghost-Bx1/ghost-osint) | OSINT - domain, email and IP intelligence from public sources |
+| [ghost-privesc](https://github.com/Ghost-Bx1/ghost-privesc) | Privilege Escalation - Linux privesc checker, 17 vectors, GTFOBins |
+| [ghost-recon](https://github.com/Ghost-Bx1/ghost-recon) | Reconnaissance - DNS, SSL, WAF, subdomain enumeration, email security |
+| [ghost-report](https://github.com/Ghost-Bx1/ghost-report) | Reporting - pentest report generator from any ghost-* JSON output |
+| [ghost-scan](https://github.com/Ghost-Bx1/ghost-scan) | Port Scanner - async TCP/UDP scanner with banner grabbing and CVE correlation |
+| [ghost-shell](https://github.com/Ghost-Bx1/ghost-shell) | Payload Generation - reverse shell and web shell generator, 25+ languages |
+| [ghost-spray](https://github.com/Ghost-Bx1/ghost-spray) | Credential Attacks - password spraying, stuffing, default credential testing |
+
+---
 
 ## Disclaimer
 
