@@ -3138,20 +3138,65 @@ def main():
     if not DNS_OK:
         print(f"{C['D']}[D] Modulo 'dnspython' nao instalado (opcional). Usando DNS-over-HTTPS como fallback.{C['X']}")
 
+    _RECON_HELP = """\033[92mModulos de Reconhecimento:\033[0m
+  \033[1m--completo\033[0m         Executar todos os modulos
+  \033[1m--dns\033[0m              Lookup DNS (A/MX/NS/TXT/SOA)
+  \033[1m--whois\033[0m            WHOIS do dominio
+  \033[1m--ssl\033[0m              Analise de certificado SSL/TLS
+  \033[1m--http\033[0m             Fingerprint HTTP (status, titulos, redirects)
+  \033[1m--waf\033[0m              Deteccao de WAF
+  \033[1m--tech\033[0m             Deteccao de tecnologias (CMS, frameworks, servidores)
+  \033[1m--headers\033[0m          Analise de security headers
+  \033[1m--portas\033[0m           Varredura de portas TCP
+  \033[1m--subdomains\033[0m       Brute-force de subdominios
+  \033[1m--email\033[0m            Enumeracao de emails (Hunter.io pattern)
+  \033[1m--ct\033[0m               Certificate Transparency logs (crt.sh)
+  \033[1m--asn\033[0m              Lookup ASN e blocos IP
+  \033[1m--s3\033[0m               Enumeracao de buckets S3/GCS/Azure
+  \033[1m--cors\033[0m             Teste de CORS misconfiguration
+  \033[1m--js\033[0m               Analise de arquivos JavaScript (links, secrets)
+  \033[1m--openredirect\033[0m     Teste de Open Redirect
+  \033[1m--passivedns\033[0m       Consulta DNS passivo historico
+  \033[1m--github-dork\033[0m      Geracao de dorks GitHub para o alvo
+  \033[1m--email-harvest\033[0m    Coleta de emails publicos (LinkedIn, whois, web)
+  \033[1m--robots\033[0m           Leitura de robots.txt e sitemap.xml
+  \033[1m--cms-deep\033[0m         Fingerprint profundo de CMS (WP/Drupal/Joomla)
+  \033[1m--git-expose\033[0m       Verifica exposicao de .git, .svn, .env
+  \033[1m--sensitive\033[0m        Busca de arquivos sensiveis (backup, config, admin)
+  \033[1m--js-secrets\033[0m       Extrai secrets de JS (API keys, tokens, URLs)
+  \033[1m--takeover\033[0m         Deteccao de subdomain takeover
+  \033[1m--wayback\033[0m          URLs arquivadas no Wayback Machine
+  \033[1m--internetdb\033[0m       Dados Shodan/InternetDB para IP
+
+\033[92mOpcoes:\033[0m
+  \033[1m-d / --dominio\033[0m     Dominio ou IP alvo (ex: exemplo.com)
+  \033[1m--targets-file\033[0m     Arquivo com alvos para scan em massa
+  \033[1m--portas-lista\033[0m     Portas customizadas (ex: 80,443,8080)
+  \033[1m--portas-top50\033[0m     Usar top 50 portas mais comuns
+  \033[1m--wordlist\033[0m         Wordlist para subdominios
+  \033[1m--threads\033[0m N         Threads paralelas (padrao: 50)
+  \033[1m--timeout\033[0m N         Timeout por requisicao (padrao: 3s)
+  \033[1m--stealth\033[0m          Modo furtivo - rate limit e UA aleatorio
+  \033[1m--proxy\033[0m            Proxy HTTP/HTTPS (ex: http://127.0.0.1:8080)
+  \033[1m--output\033[0m           Salvar resultados em JSON
+  \033[1m--html-output\033[0m      Salvar relatorio em HTML
+  \033[1m--no-banner\033[0m        Suprimir banner
+
+\033[92mExemplos:\033[0m
+  python ghost-recon.py -d exemplo.com --completo
+  python ghost-recon.py -d exemplo.com --dns --ssl --headers --cors
+  python ghost-recon.py -d exemplo.com --subdomains --threads 30
+  python ghost-recon.py -d exemplo.com --portas --portas-lista 80,443,8080,8443
+  python ghost-recon.py -d exemplo.com --js --js-secrets --git-expose
+  python ghost-recon.py -d exemplo.com --completo --output resultado.json --stealth
+
+\033[2mUse: python ghost-recon.py --help  para ver todos os flags disponiveis\033[0m
+"""
     parser = argparse.ArgumentParser(
         prog="ghost-recon",
-        description="Ghost-Recon v{} - Framework de Reconhecimento Ofensivo | By Gh0st-Bx1".format(VERSAO),
-        formatter_class=argparse.RawTextHelpFormatter,
-        epilog=(
-            "Exemplos:\n"
-            "  python ghost-recon.py -d exemplo.com\n"
-            "  python ghost-recon.py -d exemplo.com --completo\n"
-            "  python ghost-recon.py -d exemplo.com --dns --ssl --http --headers\n"
-            "  python ghost-recon.py -d exemplo.com --subdomains --threads 30\n"
-            "  python ghost-recon.py -d exemplo.com --portas --portas-lista '80,443,8080'\n"
-            "  python ghost-recon.py -d exemplo.com --completo --output resultado.json\n"
-            "  python ghost-recon.py -d exemplo.com --stealth --proxy http://127.0.0.1:8080\n"
-        ),
+        description="Ghost-Recon v{} - Framework de Reconhecimento Ofensivo  |  By Gh0st-Bx1".format(VERSAO),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_RECON_HELP,
     )
 
     parser.add_argument("-d", "--dominio", default=None,
