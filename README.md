@@ -1,15 +1,8 @@
-<div align="center">
-
 # Ghost-Recon
 
+<div align="center">
+
 [![Ghost-Recon](https://img.shields.io/badge/Ghost--Recon-Reconnaissance-red?style=for-the-badge)](https://github.com/Ghost-Bx1/ghost-recon)
-
-> Offensive reconnaissance framework - DNS, SSL, WAF, subdomain enumeration, and email security.
-
-```
-  GHOST-RECON  v1.0.0  |  Offensive Reconnaissance Framework
-  By Gh0st-Bx1         |  github.com/Ghost-Bx1
-```
 
 ![Python](https://img.shields.io/badge/Python-3.7%2B-blue?style=flat-square&logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows-lightgrey?style=flat-square)
@@ -17,6 +10,8 @@
 ![By Gh0st-Bx1](https://img.shields.io/badge/By-Gh0st--Bx1-black?style=flat-square&logo=github)
 
 </div>
+
+> Offensive reconnaissance framework - DNS, SSL, WAF, subdomain enumeration, and email security.
 
 ---
 
